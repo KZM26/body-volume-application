@@ -6,43 +6,45 @@ import preprocessor.preprocessor
 object main extends App{
     val baseConfig = List("Build (b)", "Fitting (f)", "Measurements (m)", "Preprocessor (p)", "Help (h)", "Quit (q)\n")
     val pConfig = List("View Reference Shape (v)", "Align to Reference (a)")
-    var input = ""
 
     println("Welcome to the Body Volume Application\nSelect an option")
 
-    input = scala.io.StdIn.readLine(baseConfig.mkString("\n"))
+    var input = ""
 
     while (input != "q"){
-        input match{
 
-            case "b" => // Build
-                // TODO
+      input = scala.io.StdIn.readLine(baseConfig.mkString("\n"))
+      input match{
 
-            case "f" => // Fitting
-                // TODO
+          case "b" => // Build
+            // TODO
 
-            case "m" => // Measurement
-                // TODO
+          case "f" => // Fitting
+            // TODO
 
-            case "p" => // Preprocessor
-                // TODO
+          case "m" => // Measurement
+            // TODO
 
-            case "h" => // Help
-                println("Learn how to use a computer you scrub")
+          case "p" => // Preprocessor
+            val processor = new preprocessor
+            processor.start()
 
-            case "q" => // Quit
-                input = scala.io.StdIn.readLine("Are you sure you want to quit (y/n)?")
-                input match{
+          case "h" => // Help
+            println("Learn how to use a computer you scrub\n")
 
-                    case "y" => // Yes
-                        sys.exit(0)
+          case "q" => // Quit
+            input = scala.io.StdIn.readLine("Are you sure you want to quit (y/n)?\n")
+            input match{
 
-                    case _ => // Any
-                }
+            case "y" => // Yes
+              sys.exit(0)
 
-            case _ => // Any
-                println("That ain't it chief")
+              case _ => // Any
+                println("That ain't it chief\n")
+              }
 
+          case _ => // Any
+             println("That ain't it chief\n")
         }
         input = scala.io.StdIn.readLine(baseConfig.mkString("\n"))
     }
