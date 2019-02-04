@@ -101,48 +101,46 @@ class preprocessor {
     val reference = dataset.head
 
     // Extract the point IDs from the reference shape using the landmark coordinates
-    // First check if file exists
-    if (!Files.exists(Paths.get("data/ref_landmarks/refLandmarksPoints.txt"))) {
-      println("Landmark point file not found\nRunning point finder. This can take a while")
-      // Reference landmark iterator
-      // List buffer for points
-      val it = refLandmarks.seq.iterator
-      var points = new ListBuffer[Int]()
+    // Reference landmark iterator
+    // List buffer for points
+    val it = refLandmarks.seq.iterator
+    var pointIDs = new ListBuffer[Int]()
 
-      // Iterate, get point, extract pid from the reference shape
-      while (it.hasNext){
-        val pt = it.next().point
-        val pid = reference.pointSet.pointId(pt)
-        points += pid.get.id
-      }
-
-      // Write to file
-      val writer = new PrintWriter(new File("data/ref_landmarks/refLandmarksPoints.txt"))
-      writer.write(points.mkString("\n"))
-      writer.close()
-
+    // Iterate, get point, extract pid from the reference shape
+    while (it.hasNext){
+      val pt = it.next().point
+      val pid = reference.pointSet.pointId(pt)
+      pointIDs += pid.get.id
     }
 
-
+    // Write to file
+    /**
+    val writer = new PrintWriter(new File("data/ref_landmarks/refLandmarksPoints.txt"))
+    writer.write(pointIDs.mkString("\n"))
+    writer.close()
+**/
     // Get the shapes to align to the reference
     val toAlign = dataset.tail
-    // Get the point IDs of the landmarks
-    val pointIDs = refLandmarks.map(_.id)
 
     println("Reference landmarks extracted")
 
     println("Starting alignment")
+
+    val refLandmarksProper = pointIDs.map{id => Landmark("L_"+id, reference.pointSet.point(PointId(id))) }
     // Find a rigid transform for each in the to align set and apply it
     val alignedSet = dataset.map{ mesh =>
-      val landmarks = pointIDs.map{id => Landmark[_3D]("L_"+id, mesh.pointSet.point(PointId(id.toInt)))}
+      val landmarks = pointIDs.map{id => Landmark[_3D]("L_"+id, mesh.pointSet.point(PointId(id)))}
       // TODO: Figure out what the centre should actually be
-      val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(landmarks, refLandmarks, Point3D(0, 0, 0))
+      val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(landmarks, refLandmarksProper, Point3D(0, 0, -10))
       mesh.transform(rigidTrans)
     }
 
-    println("Alignment complete. Writing to file")
+    println("Alignment complete. Writing to file (JK)")
     // Write the aligned data to file
-    Array.tabulate(alignedSet.length){i => MeshIO.writeMesh(alignedSet(i), new File("data/training_aligned/tr_gt0" + i.toString + "0.stl"))}
+    // Manual inspection
+    val ui = ScalismoUI()
+    alignedSet.indices.foreach{i => ui.show(alignedSet(i),"b_"+i)}
+    // Array.tabulate(alignedSet.length){i => MeshIO.writeMesh(alignedSet(i), new File("data/training_aligned/tr_gt0" + i.toString + "0.stl"))}
     println("Writing complete")
 
   }
