@@ -5,25 +5,17 @@ import java.io.PrintWriter
 import java.nio.file.{Files, Paths}
 import java.util
 
-import breeze.linalg.DenseVector
-import javafx.scene.shape.TriangleMesh
 import scalismo.common.{Vectorizer, _}
 import scalismo.io.MeshIO
 import scalismo.ui.api.ScalismoUI
 import scalismo.io._
 import scalismo.geometry._
-import scalismo.kernels
 import scalismo.kernels._
-import scalismo.mesh.TriangleMesh3D
 import scalismo.registration._
 import scalismo.statisticalmodel.{DiscreteLowRankGaussianProcess, GaussianProcess, LowRankGaussianProcess, StatisticalMeshModel}
 import scalismo.statisticalmodel.dataset.{DataCollection, DataItem}
 import scalismo.geometry.Dim.ThreeDSpace
 import scalismo.numerics.RandomMeshSampler3D
-import scalismo.geometry.Point.Point3DVectorizer
-import scalismo.common.Vectorizer
-import scalismo.common.DiscreteDomain
-
 import scala.collection.mutable.ListBuffer
 import scalismo.utils.Random
 
@@ -67,7 +59,7 @@ class build{
 
   def build(): Unit = {
 
-    println("Starting build process\n")
+    println("Starting build process")
 
     // Check if refLandmarks.json exists - Landmark file
     if (!Files.exists(Paths.get("data/ref_landmarks/refLandmarks.json"))) {
@@ -125,6 +117,7 @@ class build{
     // Extract covariance matrix from it
     // Create GP kernels and combine with the SSM matrix
     // Build GPSSM following standard steps
+    println("Calculating Deformation Fields")
 
     val defFields = alignedSet.map{ m =>
       val deformationVectors = pointIDs.map{ id : Int =>
@@ -141,33 +134,41 @@ class build{
     val zeroMean = VectorField(RealSpace[_3D], (pt:Point[_3D]) => Vector(0,0,0))
 
     // Kernel Set
+    // TODO: Combine kernels and see what happens
     // Gaussian Kernel
-    val s : Double = 10.0
+    val s : Double = 0.2
     val l : Double = 10.0
+
+    println("Calculating Kernels")
 
     // Use the mean shape as the reference shape
     val gaussKer : PDKernel[_3D] = GaussianKernel[_3D] (l) * s
     val matrixValuedGaussian : MatrixValuedPDKernel[_3D] = DiagonalKernel.apply(gaussKer, 3)
-    matrixValuedGaussian(pcaMean.pointSet.point(PointId(0)), pcaMean.pointSet.point(PointId(1)))
+    val linearPDKernel = LinearKernel() * 0.01
 
-
-    val discreteCov : DiscreteMatrixValuedPDKernel[_3D] = pcaModel.get.gp.cov
+    // val discreteCov : DiscreteMatrixValuedPDKernel[_3D] = pcaModel.get.gp.cov
     val gpSSM = pcaModel.get.gp.interpolate(NearestNeighborInterpolator[_3D, Vector[_3D]]())
     val SSMKernel = gpSSM.cov
+
+    val simLinear = SymmetriseKernel(linearPDKernel)
+    val augmentedKernel = (SSMKernel + simLinear) * matrixValuedGaussian
 
     val sampler = RandomMeshSampler3D(
       pcaMean,
       numberOfPoints = 300,
-      seed = 42,
+      seed = 0,
     )(Random.apply(0))
 
-    val gp = GaussianProcess(zeroMean, SSMKernel)
-
+    val theKernel = augmentedKernel
+    val gp = GaussianProcess(zeroMean, theKernel)
+    
     val lowRankGP = LowRankGaussianProcess.approximateGP(
       gp,
       sampler,
-      numBasisFunctions = 1000,
+      numBasisFunctions = 100,
     )(ThreeDSpace, vectorizer = gp.vectorizer, rand = Random.apply(0))
+
+    println("Building GP")
 
     val gpModel = StatisticalMeshModel(pcaMean, lowRankGP)
 
@@ -175,4 +176,23 @@ class build{
     ui.show(gpModel, "GP")
   }
 
+  def SymmetriseKernel(ker : PDKernel[_3D]) : MatrixValuedPDKernel[_3D] = {
+    val xmirrored = XmirroredKernel(ker)
+    val k1 = DiagonalKernel(ker, 3)
+    val k2 = DiagonalKernel(xmirrored * -1f, xmirrored, xmirrored)
+    k1 + k2
+  }
+
+}
+
+case class LinearKernel() extends PDKernel[_3D] {
+  override def domain = RealSpace[_3D]
+  override def k(x: Point[_3D], y: Point[_3D]) = {
+    x.toVector dot y.toVector
+  }
+}
+
+case class XmirroredKernel(ker : PDKernel[_3D]) extends PDKernel[_3D] {
+  override def domain = RealSpace[_3D]
+  override def k(x: Point[_3D], y: Point[_3D]) = ker(Point(x(0) * -1f ,x(1), x(2)), y)
 }
