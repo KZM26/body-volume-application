@@ -9,6 +9,7 @@ import scalismo.io.{LandmarkIO, MeshIO}
 import scalismo.utils.Random
 
 import scala.collection.mutable.ListBuffer
+import scala.io.Source
 
 class measurement {
 
@@ -92,6 +93,17 @@ class measurement {
     val dataset = files.map{f => MeshIO.readMesh(f).get}
     val reference = dataset.head
 
+    // Read file
+    val csvSRC = Source.fromFile("data/inkreate_ref/measurements.csv")
+    // Read line by line using iterator. Drop first two lines
+    val iter = csvSRC.getLines().drop(2).map(_.split(","))
+    // Collection for heights
+    var csvHeight = new ListBuffer[Int]()
+    // Extract each height (in column 2)
+    while (iter.hasNext){
+      csvHeight += iter.next()(2).toInt
+    }
+
     println("Data loaded")
 
     // Extract the point IDs from the reference shape using the landmark coordinates
@@ -107,12 +119,30 @@ class measurement {
       pointIDs += pid.get.id
     }
 
-    val meshNumber = 0
+
+
+    val pointHeight : IndexedSeq[Int] = dataset.map{mesh =>
+
+      val it2 = mesh.pointSet.points
+      var pt = it2.next()
+      var maxY = pt.y
+      var minY = pt.y
+
+      while (it2.hasNext){
+        pt = it2.next()
+        if (maxY < pt.y) maxY = pt.y
+        if (minY > pt.y) minY = pt.y
+      }
+
+      val pointHeight : Int = Math.abs(maxY - minY).toInt
+      pointHeight
+    }.toIndexedSeq
+
+    println("Done")
+/*
+    val meshNumber = 12
     val mesh = dataset(meshNumber)
-
     val landmarks = pointIDs.map{id => Landmark[_3D]("L_"+id, mesh.pointSet.point(PointId(id)))}
-
-    // TODO: Read Inkreate reference csv
 
     // Use landmarks or iterate through all or assume floor and ceiling and look for closest points to a point way higher/lower than them
     val ptCrown = landmarks.toList.head.point
@@ -121,10 +151,26 @@ class measurement {
     val landmarkHeightX = Math.abs(ptCrown.x - ptLtCalcaneousPost.x)
     val landmarkHeightY = Math.abs(ptCrown.y - ptLtCalcaneousPost.y)
 
-    println("Landmark X Dist: " + landmarkHeightX.toString + " metre")
-    println("Landmark Y Height: " + landmarkHeightY.toString + " metre")
-    println("Landmark Z Dist: " + landmarkHeightZ.toString + " metre")
+    val it2 = mesh.pointSet.points
+    var pt = it2.next()
+    var maxY = pt.y
+    var minY = pt.y
 
+    while (it2.hasNext){
+
+      pt = it2.next()
+      if (maxY < pt.y) maxY = pt.y
+      if (minY > pt.y) minY = pt.y
+
+    }
+
+    val pointHeight = Math.abs(maxY - minY)
+
+    println("Landmark X Dist: " + landmarkHeightX.toString + " mm")
+    println("Landmark Z Dist: " + landmarkHeightZ.toString + " mm")
+    println("Landmark Y Height: " + landmarkHeightY.toString + " mm")
+    println("Point Y Height: " + pointHeight.toString + " mm")
+*/
     // WC. Keep z-axis same.
     // Move left from landmark and find closes point to surface
     // If same then move forward else continue
