@@ -12,18 +12,19 @@ import scalismo.io._
 import scalismo.geometry._
 import scalismo.kernels._
 import scalismo.registration._
-import scalismo.statisticalmodel.{DiscreteLowRankGaussianProcess, GaussianProcess, LowRankGaussianProcess, StatisticalMeshModel}
+import scalismo.statisticalmodel.{DiscreteLowRankGaussianProcess, GaussianProcess, LowRankGaussianProcess, StatisticalMeshModel, dataset}
 import scalismo.statisticalmodel.dataset.{DataCollection, DataItem}
 import scalismo.geometry.Dim.ThreeDSpace
 import scalismo.numerics.RandomMeshSampler3D
 import scala.collection.mutable.ListBuffer
 import scalismo.utils.Random
+import scala.util.Try
 
 class build{
 
   def start(): Unit = {
 
-    val preprocessorConfig = List("Build shape model (b)", "Fun (f)", "Help (h)", "Quit (q)\n")
+    val preprocessorConfig = List("Build shape model (b)", "Experiments (e)", "Fun (f)", "Help (h)", "Quit (q)\n")
 
     var input = ""
 
@@ -33,6 +34,9 @@ class build{
 
         case "b" => // Start landmarking
           this.build()
+
+        case "e" =>
+          this.experiments()
 
         case "f" => // Start Alignment
           // TODO
@@ -75,10 +79,72 @@ class build{
 
     // First load files
     val files = new File("data/training/").listFiles
-    val dataset = files.map{f => MeshIO.readMesh(f).get}
+
 
     println("Data loaded")
 
+   val gpModel = this.BuildGP(files)
+
+    println("Displaying Model")
+
+    val ui = ScalismoUI()
+    ui.show(gpModel, "fbm")
+
+    println("Saving GPMM")
+
+    StatismoIO.writeStatismoMeshModel(gpModel, new File("data/fbm.h5"))
+
+    println("GPMM Saved")
+
+  }
+
+  def experiments(): Unit = {
+    // Use model metrics
+    // See https://github.com/unibas-gravis/scalismo/blob/071148d7a5193efa1bc60282f36c6e160a258efc/src/main/scala/scalismo/statisticalmodel/dataset/ModelMetrics.scala
+    // Metrics: Specificity, Generalisation, and compactness
+
+    scalismo.initialize()
+
+    println("Scalismo initialised")
+
+    val gpModel = StatismoIO.readStatismoMeshModel(new File("data/fbm.h5")).get
+
+    val files = new File("data/training/").listFiles
+    val dataset = files.map{f => MeshIO.readMesh(f).get}
+    var generalisation = new ListBuffer[Try[Double]]()
+    // 10000 samples as per Pishchulin 2017 and Styner 2003
+    val specificity = scalismo.statisticalmodel.dataset.ModelMetrics.specificity(gpModel, dataset, 10000)(Random.apply(0))
+
+    // Leave out 1 construction to test Generalisation
+    // Construct shape models leaving out 1 at each construction and measure Generalisation
+    for (i <- 0 until files.length - 1){
+
+      var fileCopy = files
+      var fileTrunc : Array[File] = null
+
+      if (i == 0){
+        fileTrunc = fileCopy.drop(1)
+      }
+      else if (i == files.length - 1){
+        fileTrunc = fileCopy.take(i)
+      }
+      else{
+        fileTrunc = fileCopy.take(i) ++ fileCopy.drop(i + 1)
+      }
+
+      val shapeModelReduced = this.BuildGP(fileTrunc)
+      val dataSet = fileTrunc.map{f => MeshIO.readMesh(f).get}
+
+      val dc = DataCollection.fromMeshSequence(dataSet.head, dataSet.toIndexedSeq)(Random.apply(0))._1.get
+      generalisation += scalismo.statisticalmodel.dataset.ModelMetrics.generalization(shapeModelReduced, dc)
+    }
+  }
+
+  def BuildGP(fileSet : Array[File]) : StatisticalMeshModel = {
+
+    val dataset = fileSet.map{f => MeshIO.readMesh(f).get}
+
+    println("Building GPMM")
     // The reference landmarks are based on shape 0 in the training set
     val refLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/ref_landmarks/refLandmarks.json")).get
     val reference = dataset.head
@@ -136,7 +202,7 @@ class build{
     // Kernel Set
     // TODO: Combine kernels and see what happens
     // Gaussian Kernel
-    val s : Double = 0.2
+    val s : Double = 0.10
     val l : Double = 10.0
 
     println("Calculating Kernels")
@@ -147,7 +213,8 @@ class build{
     val linearPDKernel = LinearKernel() * 0.01
 
     // val discreteCov : DiscreteMatrixValuedPDKernel[_3D] = pcaModel.get.gp.cov
-    val gpSSM = pcaModel.get.gp.interpolate(NearestNeighborInterpolator[_3D, Vector[_3D]]())
+    // val gpSSM = pcaModel.get.gp.interpolate(NearestNeighborInterpolator[_3D, Vector[_3D]]())
+    val gpSSM = pcaModel.get.gp.interpolateNystrom(500)(Random.apply(0))
     val SSMKernel = gpSSM.cov
 
     val simLinear = SymmetriseKernel(linearPDKernel)
@@ -155,25 +222,23 @@ class build{
 
     val sampler = RandomMeshSampler3D(
       pcaMean,
-      numberOfPoints = 300,
+      numberOfPoints = 500,
       seed = 0,
     )(Random.apply(0))
 
-    val theKernel = augmentedKernel
+    val theKernel = SSMKernel
     val gp = GaussianProcess(zeroMean, theKernel)
-    
+
     val lowRankGP = LowRankGaussianProcess.approximateGP(
       gp,
       sampler,
-      numBasisFunctions = 100,
+      numBasisFunctions = 150,
     )(ThreeDSpace, vectorizer = gp.vectorizer, rand = Random.apply(0))
 
-    println("Building GP")
 
     val gpModel = StatisticalMeshModel(pcaMean, lowRankGP)
 
-    val ui = ScalismoUI()
-    ui.show(gpModel, "GP")
+    gpModel
   }
 
   def SymmetriseKernel(ker : PDKernel[_3D]) : MatrixValuedPDKernel[_3D] = {
@@ -184,6 +249,8 @@ class build{
   }
 
 }
+
+
 
 case class LinearKernel() extends PDKernel[_3D] {
   override def domain = RealSpace[_3D]
