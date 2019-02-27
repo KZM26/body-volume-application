@@ -15,7 +15,7 @@ import scalismo.registration._
 import scalismo.statisticalmodel.dataset.{DataCollection, DataItem}
 import scala.collection.mutable.ListBuffer
 
-class preprocessor {
+class Preprocessor {
 
   def start(): Unit = {
 
@@ -24,7 +24,7 @@ class preprocessor {
     var input = ""
 
     while (input != "q") {
-      input = scala.io.StdIn.readLine(preprocessorConfig.mkString("\n"))
+      input = scala.io.StdIn.readLine(preprocessorConfig.mkString("\n")).toLowerCase()
       input match {
 
         case "l" => // Start landmarking
@@ -37,7 +37,7 @@ class preprocessor {
           println("Learn how to use a computer you scrub\n")
 
         case "q" => // Quit
-          input = scala.io.StdIn.readLine("Are you sure you want to quit (y/n)?\n")
+          input = scala.io.StdIn.readLine("Are you sure you want to quit (y/n)?\n").toLowerCase()
           input match {
 
             case "y" => // Yes
@@ -53,7 +53,7 @@ class preprocessor {
     }
   }
 
-  def landmarkRef(): Unit = {
+  private def landmarkRef(): Unit = {
 
     // Initialise Scalismo
     scalismo.initialize()
@@ -76,7 +76,7 @@ class preprocessor {
 
   }
 
-  def align(): Unit = {
+  private def align(): Unit = {
 
     // Check if refLandmarks.json exists - Landmark file
     if (!Files.exists(Paths.get("data/ref_landmarks/refLandmarks.json"))) {

@@ -20,7 +20,7 @@ import scala.collection.mutable.ListBuffer
 import scalismo.utils.Random
 import scala.util.Try
 
-class build{
+class Build{
 
   def start(): Unit = {
 
@@ -61,7 +61,7 @@ class build{
     }
   }
 
-  def build(): Unit = {
+  private def build(): Unit = {
 
     println("Starting build process")
 
@@ -90,15 +90,29 @@ class build{
     val ui = ScalismoUI()
     ui.show(gpModel, "fbm")
 
-    println("Saving GPMM")
+    var input = ""
 
-    StatismoIO.writeStatismoMeshModel(gpModel, new File("data/fbm.h5"))
+    while (input != "y" || input != "n") {
+      input = scala.io.StdIn.readLine("Save model? (y/n)").toLowerCase()
+      input match {
 
-    println("GPMM Saved")
+        case "y" => // Save model
+          println("Saving model")
+          StatismoIO.writeStatismoMeshModel(gpModel, new File("data/fbm.h5"))
+          println("Model saved")
+
+        case "n" => // Don't save model
+          return
+
+        case _ => // Any
+          println("That ain't it chief\n")
+      }
+    }
+
 
   }
 
-  def experiments(): Unit = {
+  private def experiments(): Unit = {
     // Use model metrics
     // See https://github.com/unibas-gravis/scalismo/blob/071148d7a5193efa1bc60282f36c6e160a258efc/src/main/scala/scalismo/statisticalmodel/dataset/ModelMetrics.scala
     // Metrics: Specificity, Generalisation, and compactness
@@ -111,12 +125,14 @@ class build{
 
     val files = new File("data/training/").listFiles
     val dataset = files.map{f => MeshIO.readMesh(f).get}
-    var generalisation = new ListBuffer[Try[Double]]()
+
+    // Specificity
     // 10000 samples as per Pishchulin 2017 and Styner 2003
     val specificity = scalismo.statisticalmodel.dataset.ModelMetrics.specificity(gpModel, dataset, 10000)(Random.apply(0))
 
     // Leave out 1 construction to test Generalisation
     // Construct shape models leaving out 1 at each construction and measure Generalisation
+    var generalisation = new ListBuffer[Try[Double]]()
     for (i <- 0 until files.length - 1){
 
       var fileCopy = files
@@ -138,9 +154,12 @@ class build{
       val dc = DataCollection.fromMeshSequence(dataSet.head, dataSet.toIndexedSeq)(Random.apply(0))._1.get
       generalisation += scalismo.statisticalmodel.dataset.ModelMetrics.generalization(shapeModelReduced, dc)
     }
+
+    // Compactness
+    var compactness = gpModel.gp.rank
   }
 
-  def BuildGP(fileSet : Array[File]) : StatisticalMeshModel = {
+  private def BuildGP(fileSet: Array[File]): StatisticalMeshModel = {
 
     val dataset = fileSet.map{f => MeshIO.readMesh(f).get}
 

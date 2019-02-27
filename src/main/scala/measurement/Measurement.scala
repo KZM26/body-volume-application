@@ -2,16 +2,14 @@ package measurement
 
 import java.io.File
 import java.nio.file.{Files, Paths}
-
 import scalismo.common.PointId
 import scalismo.geometry.{Landmark, _3D}
 import scalismo.io.{LandmarkIO, MeshIO}
 import scalismo.utils.Random
-
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
 
-class measurement {
+class Measurement {
 
   def start(): Unit = {
     val measurementConfig = List("Start measurements (s)", "Experiments (e)", "Help (h)", "Quit (q)\n")
@@ -48,7 +46,7 @@ class measurement {
     }
   }
 
-  def measure() : Unit ={
+  private def measure() : Unit ={
 
     // Measure height
     // Height = ABS Diff between max and min vertex
@@ -58,7 +56,7 @@ class measurement {
 
   }
 
-  def experiment() : Unit ={
+  private def experiment() : Unit ={
 
     // Measure height of all and WC of all
 
@@ -119,8 +117,6 @@ class measurement {
       pointIDs += pid.get.id
     }
 
-
-
     val pointHeight : IndexedSeq[Int] = dataset.map{mesh =>
 
       val it2 = mesh.pointSet.points
@@ -171,13 +167,7 @@ class measurement {
     println("Landmark Y Height: " + landmarkHeightY.toString + " mm")
     println("Point Y Height: " + pointHeight.toString + " mm")
 */
-    // WC. Keep z-axis same.
-    // Move left from landmark and find closes point to surface
-    // If same then move forward else continue
-    // If moving forward, same until snap back to same point
-    // Start moving right until point 90° to 1st (landmark) and 2nd points
-    // Must log distances covered throughout till end
-    // Multiply by 2 to get the WC.
+    // WC. A* algorithm
 
   }
 
