@@ -1,17 +1,18 @@
 package validation
 
 import build.Build
+
 import java.io.File
 
 import scalismo.geometry._3D
 import scalismo.io.MeshIO
 import scalismo.mesh.{MeshMetrics, TriangleMesh}
 import scalismo.statisticalmodel.StatisticalMeshModel
-import scalismo.statisticalmodel.dataset.{DataCollection, PCAModel}
+import scalismo.statisticalmodel.dataset.DataCollection
 
 object Generalisation {
 
-  def generalisation(datasetPath : String, distance : String, outputPath : String) = {
+  def generalisation(datasetPath : String, distance : String, outputPath : String): Unit = {
     scalismo.initialize()
 
     // Build GPMM from aligned data
@@ -28,8 +29,6 @@ object Generalisation {
     // Write to file
     writeToFile(folds, outputPath)
   }
-
-
 
   // Withdraws one instance of the dataset, creates a training set with the others,
   // builds GPMM, measures the distance between the withdrawn instance and its projection onto the GPMM
@@ -52,23 +51,24 @@ object Generalisation {
       // Build GPMM using DC
       val gpModel = Build.BuildGP(trainingCollection)
 
-      val pcaModel : StatisticalMeshModel = PCAModel.buildModelFromDataCollection(trainingCollection).get
-      //table of reduced PCA to first n components
-      val limited : Seq[StatisticalMeshModel] = Specificity.varyingPCA(pcaModel, trainingDataItems.size)
-      //distance between instance and its projection
+      // Seq of reduced GPMM reduced to first n components
+      val limited : Seq[StatisticalMeshModel] = Utils.gpVaryingRank(gpModel, trainingDataItems.size)
+
+      // Distance between instance and its projection
       distancesEval(limited, testMesh, distance)
     }
     distances
   }
 
-  def distancesEval(pcaModelSeq: Seq[StatisticalMeshModel], projMesh: TriangleMesh, distance: String) : Seq[Double] = {
-    val distances = for(pca<- pcaModelSeq) yield {
-      val proj : TriangleMesh = pca.project(projMesh)
+  def distancesEval(gpModelSeq: Seq[StatisticalMeshModel], projMesh: TriangleMesh[_3D], distance: String) : Seq[Double] = {
+
+    val distances = for(pca<- gpModelSeq) yield {
+      val proj : TriangleMesh[_3D] = pca.project(projMesh)
       MeshMetrics.avgDistance(proj,projMesh)
       val dist = distance match {
         case avg => MeshMetrics.avgDistance(proj,projMesh)
         case rms => MeshMetrics.procrustesDistance(proj,projMesh)
-        case hausdorff => Hausdorff.modifiedHausdorffDistance(proj,projMesh)
+        case hausdorff => MeshMetrics.hausdorffDistance(proj,projMesh)
       }
       dist
     }
@@ -76,25 +76,27 @@ object Generalisation {
   }
 
   def transpose(crossValidation: Seq[Seq[Double]]): Seq[Seq[Double]] = {
-    for(i<- 0 until crossValidation(0).size) yield {
-      for(j<- 0 until crossValidation.size) yield {
+    for(i<- crossValidation.head.indices) yield {
+      for(j<- crossValidation.head.indices) yield {
         crossValidation(j)(i)
       }
     }
   }
 
-  def writeToFile(matrix: Seq[Seq[Double]], outputPath : String) = {
-    val writer = Specificity.openFile(outputPath)
-    for(j<- 0 until matrix.size) yield {
+  def writeToFile(matrix: Seq[Seq[Double]], outputPath : String): Unit = {
+    val writer = Utils.openFile(outputPath)
+    for(j <- matrix.indices) yield {
       writer.write("instance n°"+j+"\r\n")
-      for(i<- 0 until matrix(j).size) {
+
+      for( i<- matrix(j).indices) {
         writer.write(matrix(j)(i).toString+" ")
       }
+
       writer.write("\r\n")
     }
 
     val tfolds : Seq[Seq[Double]] = transpose(matrix) //lines and columns to be transposed as in specificity
-    Specificity.writeMean(tfolds, writer)
+    Utils.writeMean(tfolds, writer)
     writer.close()
   }
 
