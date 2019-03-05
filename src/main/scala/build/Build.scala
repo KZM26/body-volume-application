@@ -3,7 +3,6 @@ package build
 import java.io.File
 import java.io.PrintWriter
 import java.nio.file.{Files, Paths}
-import java.util
 
 import scalismo.common.{Vectorizer, _}
 import scalismo.io.MeshIO
@@ -15,12 +14,14 @@ import scalismo.registration._
 import scalismo.statisticalmodel.{DiscreteLowRankGaussianProcess, GaussianProcess, LowRankGaussianProcess, StatisticalMeshModel, dataset}
 import scalismo.statisticalmodel.dataset.{DataCollection, DataItem}
 import scalismo.geometry.Dim.ThreeDSpace
+import scalismo.mesh.TriangleMesh
 import scalismo.numerics.RandomMeshSampler3D
-import scala.collection.mutable.ListBuffer
 import scalismo.utils.Random
-import scala.util.Try
 
-class Build{
+import scala.collection.mutable.ListBuffer
+import scala.util.{Success, Try}
+
+object Build{
 
   def start(): Unit = {
 
@@ -100,6 +101,7 @@ class Build{
           println("Saving model")
           StatismoIO.writeStatismoMeshModel(gpModel, new File("data/fbm.h5"))
           println("Model saved")
+          return
 
         case "n" => // Don't save model
           return
@@ -126,14 +128,15 @@ class Build{
     val files = new File("data/training/").listFiles
     val dataset = files.map{f => MeshIO.readMesh(f).get}
 
-    // Specificity
-    // 10000 samples as per Pishchulin 2017 and Styner 2003
-    val specificity = scalismo.statisticalmodel.dataset.ModelMetrics.specificity(gpModel, dataset, 10000)(Random.apply(0))
+    println("Data loaded")
 
     // Leave out 1 construction to test Generalisation
     // Construct shape models leaving out 1 at each construction and measure Generalisation
+    println("Calculating Generalisation")
     var generalisation = new ListBuffer[Try[Double]]()
-    for (i <- 0 until files.length - 1){
+    for (i <- 1 until 2){//files.length - 1){
+
+      println("Loop: " + i.toString)
 
       var fileCopy = files
       var fileTrunc : Array[File] = null
@@ -151,68 +154,68 @@ class Build{
       val shapeModelReduced = this.BuildGP(fileTrunc)
       val dataSet = fileTrunc.map{f => MeshIO.readMesh(f).get}
 
-      val dc = DataCollection.fromMeshSequence(dataSet.head, dataSet.toIndexedSeq)(Random.apply(0))._1.get
+      val dc = DataCollection.fromMeshSequence(shapeModelReduced.referenceMesh, dataSet.toIndexedSeq)(Random.apply(0))._1.get
       generalisation += scalismo.statisticalmodel.dataset.ModelMetrics.generalization(shapeModelReduced, dc)
     }
 
+    val listGeneralisation = generalisation.collect({case Success(value) => value})
+
+    // Specificity
+    // 10000 samples as per Pishchulin 2017 and Styner 2003
+    println("Calculating Specificity")
+    val specificity = scalismo.statisticalmodel.dataset.ModelMetrics.specificity(gpModel, dataset, 3)(Random.apply(0))
+
     // Compactness
-    var compactness = gpModel.gp.rank
+    println("Determining Compactness")
+    val compactness = gpModel.gp.rank
+
+    println("Writing results to file")
+    var writer = new PrintWriter(new File("data/specificity.txt"))
+    writer.write(specificity.toString)
+    writer.close()
+
+
+    writer = new PrintWriter(new File("data/generalisation.txt"))
+    writer.write((listGeneralisation.sum/listGeneralisation.length).toString)
+    writer.close()
+
+    writer = new PrintWriter(new File("data/compactness.txt"))
+    writer.write(compactness.toString)
+    writer.close()
+    println("Writing complete")
+
   }
 
-  private def BuildGP(fileSet: Array[File]): StatisticalMeshModel = {
-
-    val dataset = fileSet.map{f => MeshIO.readMesh(f).get}
+  /**
+    * Builds GPMM
+    *
+    * Parameters:
+    *    -   `fileSet` Array of unaligned files
+    * Returns:
+    *    -  Statistical mesh model
+    */
+  def BuildGP(fileSet: Array[File]): StatisticalMeshModel = {
 
     println("Building GPMM")
-    // The reference landmarks are based on shape 0 in the training set
-    val refLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/ref_landmarks/refLandmarks.json")).get
-    val reference = dataset.head
+    val path = "data/ref_landmarks/refLandmarks.json"
+    val dataset = fileSet.map{f => MeshIO.readMesh(f).get}
+    val alignedSet = alignMesh(dataset, path)
 
-    // Extract the point IDs from the reference shape using the landmark coordinates
-    // Reference landmark iterator
-    // List buffer for points
-    val it = refLandmarks.seq.iterator
-    var pointIDs = new ListBuffer[Int]()
+    val dc = DataCollection.fromMeshSequence(alignedSet.head, alignedSet.tail)(Random.apply(0))._1.get
 
-    // Iterate, get point, extract pid from the reference shape
-    while (it.hasNext){
-      val pt = it.next().point
-      val pid = reference.pointSet.pointId(pt)
-      pointIDs += pid.get.id
-    }
+    BuildGP(dc)
+  }
 
-    // Get the shapes to align to the reference
-    val toAlign = dataset.tail
+  /**
+    * Builds GPMM
+    *
+    * Parameters:
+    *    -   `dc` Data collection of meshes
+    * Returns:
+    *    -  Statistical mesh model
+    */
+  def BuildGP(dc: DataCollection): StatisticalMeshModel = {
 
-    println("Starting alignment")
-
-    val refLandmarksProper = pointIDs.map{id => Landmark("L_"+id, reference.pointSet.point(PointId(id))) }
-    // Find a rigid transform for each in the to align set and apply it
-    val alignedSet = dataset.map{ mesh =>
-      val landmarks = pointIDs.map{id => Landmark[_3D]("L_"+id, mesh.pointSet.point(PointId(id)))}
-      // TODO: Figure out what the centre should actually be
-      val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(landmarks, refLandmarksProper, Point3D(0, 0, -10))
-      mesh.transform(rigidTrans)
-    }
-
-    println("Alignment complete. Writing to file (JK)")
-
-    // Create deformation fields from aligned data
-    // Build & save PCA model
-    // Extract covariance matrix from it
-    // Create GP kernels and combine with the SSM matrix
-    // Build GPSSM following standard steps
-    println("Calculating Deformation Fields")
-
-    val defFields = alignedSet.map{ m =>
-      val deformationVectors = pointIDs.map{ id : Int =>
-        m.pointSet.point(PointId(id)) - reference.pointSet.point(PointId(id))
-      }.toIndexedSeq
-
-      DiscreteField[_3D, UnstructuredPointsDomain[_3D], Vector[_3D]](reference.pointSet, deformationVectors)
-    }.toIndexedSeq
-
-    val dc = DataCollection.fromMeshSequence(reference, alignedSet.toIndexedSeq)(Random.apply(0))._1.get
     val pcaModel = StatisticalMeshModel.createUsingPCA(dc)
     val pcaMean = pcaModel.get.mean
     // The zero mean
@@ -260,7 +263,54 @@ class Build{
     gpModel
   }
 
-  def SymmetriseKernel(ker : PDKernel[_3D]) : MatrixValuedPDKernel[_3D] = {
+  /**
+    * Builds GPMM
+    *
+    * Parameters:
+    *    -   `dataset` Array of unaligned files
+    *    -   `path` Path of landmarks
+    * Returns:
+    *    -  Aligned files using the landmarks based of the first shape
+    */
+  def alignMesh(dataset: Array[TriangleMesh[_3D]], path: String): IndexedSeq[TriangleMesh[_3D]]  = {
+
+    // The reference landmarks are based on shape 0 in the training set
+    val refLandmarks = LandmarkIO.readLandmarksJson[_3D](new File(path)).get
+    val reference = dataset.head
+
+    // Extract the point IDs from the reference shape using the landmark coordinates
+    // Reference landmark iterator
+    // List buffer for points
+    val it = refLandmarks.seq.iterator
+    var pointIDs = new ListBuffer[Int]()
+
+    // Iterate, get point, extract pid from the reference shape
+    while (it.hasNext){
+      val pt = it.next().point
+      val pid = reference.pointSet.pointId(pt)
+      pointIDs += pid.get.id
+    }
+
+    // Get the shapes to align to the reference
+    val toAlign = dataset.tail
+
+    println("Starting alignment")
+
+    val refLandmarksProper = pointIDs.map{id => Landmark("L_"+id, reference.pointSet.point(PointId(id))) }
+    // Find a rigid transform for each in the to align set and apply it
+    val alignedSet = dataset.map{ mesh =>
+      val landmarks = pointIDs.map{id => Landmark[_3D]("L_"+id, mesh.pointSet.point(PointId(id)))}
+      // TODO: Figure out what the centre should actually be
+      val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(landmarks, refLandmarksProper, Point3D(0, 0, -10))
+      mesh.transform(rigidTrans)
+    }
+
+    println("Alignment complete")
+
+    alignedSet.toIndexedSeq
+  }
+
+  def SymmetriseKernel(ker : PDKernel[_3D]): MatrixValuedPDKernel[_3D] = {
     val xmirrored = XmirroredKernel(ker)
     val k1 = DiagonalKernel(ker, 3)
     val k2 = DiagonalKernel(xmirrored * -1f, xmirrored, xmirrored)
