@@ -9,7 +9,7 @@ import scalismo.utils.Random
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
 
-class Measurement {
+object Measurement {
 
   def start(): Unit = {
     val measurementConfig = List("Start measurements (s)", "Experiments (e)", "Help (h)", "Quit (q)\n")

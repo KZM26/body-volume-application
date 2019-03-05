@@ -15,7 +15,7 @@ import scalismo.registration._
 import scalismo.statisticalmodel.dataset.{DataCollection, DataItem}
 import scala.collection.mutable.ListBuffer
 
-class Preprocessor {
+object Preprocessor {
 
   def start(): Unit = {
 
