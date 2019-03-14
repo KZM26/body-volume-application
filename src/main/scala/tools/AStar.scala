@@ -120,9 +120,7 @@ object AStar {
   private def reconstructPath(cameFrom: ListBuffer[PointFrom], start: Point[_3D], end: Point[_3D]): ListBuffer[Point[_3D]] = {
     var current = end
     var path = new ListBuffer[Point[_3D]]
-
-    // TODO: Fix problem with end not being in came from. Can put it in came from or reconstruct in forward direction since have start
-
+    
     // Start at the end and work backwards till current is the start
     while (!pointsEqual(current, start)) {
       // Add current point to path
