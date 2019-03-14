@@ -1,18 +1,25 @@
 package tools
 
-import scalismo.common.PointId
-import scalismo.geometry.{Landmark, Point, _3D}
-import scalismo.io.{LandmarkIO, MeshIO}
+import scalismo.geometry.{Point, _3D}
 import scalismo.mesh.TriangleMesh
 
 import scala.collection.mutable
-import scala.math.{sqrt, Ordering}
+import scala.math.Ordering
 import scala.collection.mutable.ListBuffer
-import scala.collection.mutable.PriorityQueue
-import scala.io.Source
-import scala.util.control.Breaks._
 
-class AStar {
+object AStar {
+
+  def calculateDistance(mesh: TriangleMesh[_3D], start: Point[_3D], end: Point[_3D]): Double = {
+
+    // Find true start and end as landmark point != point on mesh
+    val trueStart = mesh.pointSet.findClosestPoint(start).point
+    val trueEnd = mesh.pointSet.findClosestPoint(end).point
+
+    val (cameFrom, cost)= aStarSearch(mesh, trueStart, trueEnd)
+    val path = reconstructPath(cameFrom, trueStart, trueEnd)
+    pathDistance(path)
+
+  }
 
   // Define ordering case class and metric extraction
   private case class PointCost(point: Point[_3D], cost: Double)
@@ -34,7 +41,7 @@ class AStar {
     * Returns:
     *    -  Euclidean distance from `a` to `b`
     */
-  private def aStarSearch(mesh: TriangleMesh[_3D], start: Point[_3D], end: Point[_3D]) = {
+  private def aStarSearch(mesh: TriangleMesh[_3D], start: Point[_3D], end: Point[_3D]): Tuple2[ListBuffer[PointFrom], ListBuffer[PointCost]] = {
 
     val frontier: mutable.PriorityQueue[PointCost] = new mutable.PriorityQueue[PointCost]()(Ordering.by(getPointCostCost))
     frontier.enqueue(PointCost(start, 0))
@@ -42,48 +49,61 @@ class AStar {
     val cameFrom = new ListBuffer[PointFrom]()
     val costSoFar = new ListBuffer[PointCost]()
 
-    cameFrom += PointFrom(start, null)
+    cameFrom += PointFrom(start, start)
     costSoFar += PointCost(start, 0)
 
     while (frontier.nonEmpty) {
       val current = frontier.dequeue()
 
       // Check if current point matches destination. If so, break
-      if (this.pointsEqual(current.point, end))
-        break()
+      if (pointsEqual(current.point, end))
+        return  (cameFrom, costSoFar)
 
       // Extract start pointID and find IndexedSeq of neighbours from the original mesh
       // Assumption is that start point is on the mesh.
-      val startPointID = mesh.pointSet.findClosestPoint(start).id
-      val neighbours = mesh.triangulation.adjacentPointsForPoint(startPointID)
+      val currentPointID = mesh.pointSet.findClosestPoint(current.point).id
+      val neighbours = mesh.triangulation.adjacentPointsForPoint(currentPointID)
       // Iterator of pointIDs
       val neighboursIterator = neighbours.iterator
 
       // Iterate through a point's neighbours to find costs
       while(neighboursIterator.hasNext) {
-
         val next = mesh.pointSet.point(neighboursIterator.next())
 
         // Search through cost so far for a PointCost containing the current point and get the cost of that PointCost
-        var newCost = costSoFar.find((p: PointCost) => (current.point.x == p.point.x) && (current.point.y == p.point.y) && (current.point.z == p.point.z)).get.cost
+        var newCost: Double = 0.0
+        val cSoFar = costSoFar.find((p: PointCost) => pointsEqual(current.point, p.point))
+        if (cSoFar.isDefined){
+          newCost += cSoFar.get.cost
+        }
         // Add the distance to the first neighbour in the neighbour iterator. Found using the mesh and the pointID from the iterator
-        newCost += this.heuristic(current.point, next)
+        newCost += heuristic(current.point, next)
 
         // If next it not in costSoFar (ie: an unseen point) OR newCost is less than costSoFar to next
-        if ((!costSoFar.exists((p: PointCost) => (next.x == p.point.x) && (next.y == p.point.y) && (next.z == p.point.z))) ||
-        (newCost < costSoFar.find((p: PointCost) => (next.x == p.point.x) && (next.y == p.point.y) && (next.z == p.point.z)).get.cost)) {
-
+        val cPoint = costSoFar.find((p: PointCost) => pointsEqual(next, p.point))
+        if (cPoint.isEmpty || (newCost < cPoint.get.cost)) {
           // Add cost to next to costSoFar as CostPoint
+          // Check if the current point is in costSoFar, if true replace
+          if (cPoint.isDefined){
+            costSoFar -= cPoint.get
+          }
+
           costSoFar += PointCost(next, newCost)
+
           // Add to the frontier, the next point and priority = cost to get there + distance from end (heuristic)
-          val priority = newCost + this.heuristic(end, next)
+          val priority = newCost + heuristic(end, next)
           frontier.enqueue(PointCost(next, priority))
+
           // Add a point from for current and next (ie: where I am and where I'm going next)
-          cameFrom += PointFrom(current.point, next)
+          // Sane as for costSoFar, check & update
+          val cfPoint = cameFrom.find((p: PointFrom) => pointsEqual(next, p.ori))
+          if (cfPoint.isDefined) {
+            cameFrom -= cfPoint.get
+          }
+            cameFrom += PointFrom(current.point, next)
         }
       }
     }
-
     (cameFrom, costSoFar)
   }
 
@@ -97,16 +117,18 @@ class AStar {
     * Returns:
     *    -  List of points representing the path
     */
-  private def reconstructPath(cameFrom: ListBuffer[PointFrom], start: Point[_3D], end: Point[_3D]): Unit = {
+  private def reconstructPath(cameFrom: ListBuffer[PointFrom], start: Point[_3D], end: Point[_3D]): ListBuffer[Point[_3D]] = {
     var current = end
     var path = new ListBuffer[Point[_3D]]
 
+    // TODO: Fix problem with end not being in came from. Can put it in came from or reconstruct in forward direction since have start
+
     // Start at the end and work backwards till current is the start
-    while (!this.pointsEqual(current, start)) {
+    while (!pointsEqual(current, start)) {
       // Add current point to path
       path += current
       // Search cameFrom using destination that matches current. When found get the origin and make it current (move to that point)
-      current = cameFrom.find((p: PointFrom) => equals(p.des, current)).get.ori
+      current = cameFrom.find((p: PointFrom) => pointsEqual(p.des, current)).get.ori
     }
 
     // Add start to path and return a reversed path
@@ -124,9 +146,10 @@ class AStar {
     *    -  Length of path
     */
   private def pathDistance(path: ListBuffer[Point[_3D]]): Double = {
+
     var length: Double = 0.0
 
-    for (i <- 0 until (path.length - 2))
+    for (i <- 0 until (path.length - 1))
       length += this.heuristic(path(i), path(i + 1))
 
     length
@@ -141,7 +164,7 @@ class AStar {
     * Returns:
     *    -  Euclidean distance from `a` to `b`
     */
-  private def heuristic(a: Point[_3D], b: Point[_3D]) : Double = {
+  private def heuristic(a: Point[_3D], b: Point[_3D]): Double = {
     math.sqrt(math.pow(a.x - b.x,2) + math.pow(a.y - b.y,2) + math.pow(a.z - b.z,2))
   }
 
@@ -154,7 +177,10 @@ class AStar {
     * Returns:
     *    -  Boolean indicating if x,y,z of points are the same
     */
-  private def pointsEqual(a: Point[_3D], b: Point[_3D]) : Boolean = {
+  private def pointsEqual(a: Point[_3D], b: Point[_3D]): Boolean = {
+    if (a == null || b == null){
+      return false
+    }
     (a.x == b.x) && (a.y == b.y) && (a.z == b.z)
   }
 
