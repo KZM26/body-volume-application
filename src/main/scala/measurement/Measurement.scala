@@ -2,10 +2,14 @@ package measurement
 
 import java.io.File
 import java.nio.file.{Files, Paths}
+
 import scalismo.common.PointId
 import scalismo.geometry.{Landmark, _3D}
 import scalismo.io.{LandmarkIO, MeshIO}
+import scalismo.mesh.TriangleMesh
 import scalismo.utils.Random
+import tools.AStar
+
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
 
@@ -21,10 +25,11 @@ object Measurement {
       input match {
 
         case "s" => // Start measurements
-          this.measure()
+          measure()
 
         case "e" => // Start experiments
-          this.experiment()
+          aStarTest()
+          volumeTest()
 
         case "h" => // Help
           println("Learn how to use a computer you scrub\n")
@@ -56,7 +61,7 @@ object Measurement {
 
   }
 
-  private def experiment() : Unit ={
+  private def heightExperiment() : Unit ={
 
     // Measure height of all and WC of all
 
@@ -78,13 +83,13 @@ object Measurement {
     println("Scalismo initialised")
 
     // Check if refLandmarks.json exists - Landmark file
-    if (!Files.exists(Paths.get("data/inkreate_ref/inkreateRefLandmarks.json"))) {
+    if (!Files.exists(Paths.get("data/inkreate-ref/inkreateRefLandmarks.json"))) {
       println("Landmark file - inkreateRefLandmarks.json not found. Returning to previous menu")
       return
     }
 
     // The reference landmarks are based on shape 0 in the training set
-    val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate_ref/inkreateRefLandmarks.json")).get
+    val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate-ref/inkreateRefLandmarks.json")).get
 
     // First load files
     val files = new File("data/inkreate/").listFiles
@@ -92,7 +97,7 @@ object Measurement {
     val reference = dataset.head
 
     // Read file
-    val csvSRC = Source.fromFile("data/inkreate_ref/measurements.csv")
+    val csvSRC = Source.fromFile("data/inkreate-ref/measurements.csv")
     // Read line by line using iterator. Drop first two lines
     val iter = csvSRC.getLines().drop(2).map(_.split(","))
     // Collection for heights
@@ -107,7 +112,7 @@ object Measurement {
     // Extract the point IDs from the reference shape using the landmark coordinates
     // Reference landmark iterator
     // List buffer for points
-    var it = inkreateRefLandmarks.seq.iterator
+    val it = inkreateRefLandmarks.seq.iterator
     var pointIDs = new ListBuffer[Int]()
 
     // Iterate, get point, extract pid from the reference shape
@@ -170,5 +175,55 @@ object Measurement {
     // WC. A* algorithm
 
   }
+
+  private def aStarTest(): Unit = {
+
+    scalismo.initialize()
+
+    println("Scalismo initialised")
+
+    // First load files
+    // Extract meshs (.stl) and landmarks (.json)
+    val files = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sq")).sortBy(_.getName)
+    val trueDistance = files.filter(f => f.getName.contains(".stl")).map{f => f.getName.substring(0, f.getName.indexOf(".") - 2).toInt}
+    val dataset = files.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
+    val landmarks = files.filter(f => f.getName.contains(".json")).map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
+    var distance = new ListBuffer[Double]
+    var result = new ListBuffer[Boolean]
+
+    for (i <- dataset.indices){
+      val mesh = dataset(i)
+      val start = landmarks(i).toIndexedSeq(0).point
+      val end = landmarks(i).toIndexedSeq(1).point
+      distance += AStar.calculateDistance(mesh, start, end)
+      result += distance(i) == trueDistance(i)
+    }
+
+    println(result.mkString("\n"))
+  }
+
+  private def volumeTest(): Unit = {
+    val files = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sq")).sortBy(_.getName)
+    val trueVolume = files.filter(f => f.getName.contains(".stl")).map{f => math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
+    val dataset = files.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
+
+    for (i <- dataset.indices){
+      val mesh = dataset(i)
+      val vol = getMeshVolume(mesh)
+      println(vol == trueVolume(i))
+    }
+  }
+
+  private def getMeshVolume(mesh: TriangleMesh[_3D]): Double = {
+    // Convert TriangleMesh[_3D] to vtkPolyData
+    val vtkMesh = scalismo.utils.MeshConversion.meshToVtkPolyData(mesh)
+    // Create new vtk mass properties object
+    val mass = new vtk.vtkMassProperties()
+    // Add mesh to the properties object
+    mass.AddInputData(vtkMesh)
+    // Return volume
+    mass.GetVolume()
+  }
+
 
 }
