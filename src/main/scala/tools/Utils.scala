@@ -4,7 +4,7 @@ import java.io.{BufferedWriter, File, FileWriter, PrintWriter}
 import java.util
 import java.util.Calendar
 
-import au.com.bytecode.opencsv.CSVWriter
+import com.opencsv.CSVWriter
 import scalismo.statisticalmodel.StatisticalMeshModel
 
 object Utils {
