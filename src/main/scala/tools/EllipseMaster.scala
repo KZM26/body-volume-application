@@ -71,7 +71,6 @@ object  EllipseMaster {
   }
 
   // Integral approximation of circumference
-  // TODO: Fix this vs ground truth
   def integral(a: Double, b: Double, n: Int): Double = {
     var len = 0.0
     var major = 0.0
@@ -88,8 +87,7 @@ object  EllipseMaster {
     }
 
     val dt = 0.5 * math.Pi/n
-    val e = math.sqrt(1 - minor*minor/major*major)
-    val e2 = e * e
+    val e2 = 1.0 - ((minor*minor)/(major*major)) // Eccentricity squared
 
     for (i <- 0 until n){
       val theta = (0.5 * math.Pi * (i + 0.5))/n.toDouble
@@ -139,9 +137,21 @@ object  EllipseMaster {
   }
 
   // Cantrell mean approximation for lower eccentricities
-  // TODO: Fix this vs ground truth
   def cantrell (a: Double, b: Double): Double = {
-    val e = math.sqrt(1 - b*b/a*a)
+    var major = 0.0
+    var minor = 0.0
+
+    // Check what is major and what is minor for axis
+    if (a >= b){
+      major = a
+      minor = b
+    }
+    else{
+      major = b
+      minor = a
+    }
+
+    val e = math.sqrt(1.0 - ((minor*minor)/(major*major)))
     var s = 0.0
 
     if (e < 0.99){
@@ -151,69 +161,7 @@ object  EllipseMaster {
       s = math.log(2.0)/math.log(2.0/(4 -  math.Pi))
     }
 
-    4 * (a + b) - (2 * (4 - math.Pi) * a * b)/math.pow(math.pow(a, s) + math.pow(b, s), 1/s)
-  }
-
-  // Exact approximation
-  // TODO: Fix this vs ground truth
-  def exact (a: Double, b: Double, n: Int): Double = {
-
-    // Check what is major and what is minor for axis
-    var major = 0.0
-    var minor = 0.0
-    if (a >= b){
-      major = a
-      minor = b
-    }
-    else{
-      major = b
-      minor = a
-    }
-
-    val e = math.sqrt(1 - minor*minor/major*major)
-
-    var len = 0.0
-    for (i <- 1 until n){
-      val num = -math.pow(e, 2 * i) * math.pow(factorial(2 * i).toInt/math.pow(math.pow(2, i) * factorial(i).toInt, 2), 2)
-      len += num/(2 * i - 1)
-    }
-    len * 2 * math.Pi * major
-  }
-
-  // Bessel approximation
-  // TODO: Check if it's worth it. Takes way too long
-  def bessel (a: Double, b: Double, n: Int): Double = {
-    var len = 0.0
-
-    // Check what is major and what is minor for axis
-    var major = 0.0
-    var minor = 0.0
-    if (a >= b){
-      major = a
-      minor = b
-    }
-    else{
-      major = b
-      minor = a
-    }
-
-    val h = math.pow(major - minor, 2)/math.pow(major + minor, 2)
-    len += 1 + h/4
-
-    for (i <- 2 until n){
-      len += math.pow(factorial(factorial(2 * i - 3).toInt).toInt/(math.pow(2, i) * factorial(i).toInt), 2) * math.pow(h, i)
-    }
-    len * math.Pi * (major + minor)
-  }
-
-  // Recursive factorial implementation
-  // Code from: https://medium.com/@mattmichihara/scala-tail-call-optimization-f853b8f295dc
-  def factorial(n: Int, accum: BigInt = 1): BigInt = {
-    if (n == 0) {
-      accum
-    } else {
-      factorial(n - 1, n * accum)
-    }
+    4 * (major + minor) - (2 * (4 - math.Pi) * major * minor)/math.pow(math.pow(major, s)/2.0 + math.pow(minor, s)/2.0, 1/s)
   }
 
   private def distance(a: Point[_3D], b: Point[_3D]): Double = {
