@@ -35,16 +35,27 @@ object  EllipseMaster {
         See https://en.wikipedia.org/wiki/Ellipse#Circumference under Ivory and Bessel derivation
   */
   // Numerical approximation of circumference
-  // TODO: Major, minor axis check
   def numerical(a: Double, b: Double, n: Int): Double = {
     var len = 0.0
     var xLast = 0.0
     var yLast = 0.0
+    var major = 0.0
+    var minor = 0.0
+
+    // Check what is major and what is minor for axis
+    if (a >= b){
+      major = a
+      minor = b
+    }
+    else{
+      major = b
+      minor = a
+    }
 
     for (i <- 0 to n){
       val theta = 0.5 * math.Pi * i/n.toDouble
-      val x = a * math.cos(theta)
-      val y = b * math.sin(theta)
+      val x = major * math.cos(theta)
+      val y = minor * math.sin(theta)
 
       if (i > 0){
         val xDiff = x - xLast
@@ -63,8 +74,6 @@ object  EllipseMaster {
   // TODO: Fix this vs ground truth
   def integral(a: Double, b: Double, n: Int): Double = {
     var len = 0.0
-
-    val dt = 0.5 * math.Pi/n.toDouble
     var major = 0.0
     var minor = 0.0
 
@@ -78,16 +87,17 @@ object  EllipseMaster {
       minor = a
     }
 
+    val dt = 0.5 * math.Pi/n
     val e = math.sqrt(1 - minor*minor/major*major)
     val e2 = e * e
 
     for (i <- 0 until n){
-      val theta = 0.5 * math.Pi * (i + 0.5)/n.toDouble
+      val theta = (0.5 * math.Pi * (i + 0.5))/n.toDouble
       val temp = 1 - e2 * math.sin(theta) * math.sin(theta)
       val add = math.sqrt(temp) * dt
       len += add
     }
-    len * 4 * minor
+    len * 4 * major
   }
 
   // Circle approximation. When a == b
@@ -167,7 +177,7 @@ object  EllipseMaster {
       val num = -math.pow(e, 2 * i) * math.pow(factorial(2 * i).toInt/math.pow(math.pow(2, i) * factorial(i).toInt, 2), 2)
       len += num/(2 * i - 1)
     }
-    len * 2 * math.Pi * minor
+    len * 2 * math.Pi * major
   }
 
   // Bessel approximation
