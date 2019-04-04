@@ -50,8 +50,6 @@ class EllipseMasterTest extends BVATestSuite {
     }
   }
 
-// TODO: Check ground truth
-  /*
   it ("Integral approximation tests") {
     val a = 1
     var b = 1
@@ -67,7 +65,7 @@ class EllipseMasterTest extends BVATestSuite {
       assert(abs < 0.01)
       n *= 10
     }
-/*
+
     b = 2
     // Real values for 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000
     realVal = IndexedSeq[Double](9.68844822056413, 9.68844822054768, 9.68844822054768, 9.68844822054761, 9.68844822054766, 9.68844822054803, 9.68844822054681, 9.68844822054597)
@@ -108,9 +106,9 @@ class EllipseMasterTest extends BVATestSuite {
       val abs = math.abs(diff)
       assert(abs < 0.01)
       n *= 10
-    }*/
+    }
   }
-*/
+
   it ("Anonymous approximation test"){
     val a = 1
 
@@ -211,8 +209,6 @@ class EllipseMasterTest extends BVATestSuite {
     assert(math.abs(EllipseMaster.holderHigh(a, b)/realVal - 1) < 0.01)
   }
 
-  // TODO: Check ground truth
-  /*
   it ("Cantrell approximation test"){
     val a = 1
 
@@ -231,95 +227,6 @@ class EllipseMasterTest extends BVATestSuite {
     b = 1000
     realVal = 4000.01691838166516
     assert(math.abs(EllipseMaster.cantrell(a, b)/realVal - 1) < 0.01)
-  }
-  */
-  // TODO: Check ground truth
-  /*
-  it ("Exact approximation tests") {
-    val a = 1
-    var b = 1
-    // Real values for 10, 50, 250, 1250
-    var realVal = IndexedSeq[Double](6.28318530717959, 6.28318530717959, 6.28318530717959, 6.28318530717959)
-
-    var n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.exact(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 5
-    }
-
-    b = 2
-    // Real values for 10, 50, 250, 1250
-    realVal = IndexedSeq[Double](9.69160447929656, 9.68844822218643, 9.68844822054768, 9.68844822054768)
-
-    n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.exact(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 5
-    }
-
-    b = 10
-    // Real values for 10, 50, 250, 1250
-    realVal = IndexedSeq[Double](41.42030490115282, 40.70623873690818, 40.64052842541464, 40.63974180295930)
-
-    n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.exact(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 5
-    }
-
-    b = 1000
-    // Real values for 10, 50, 250, 1250
-    realVal = IndexedSeq[Double](4106.61427461212224, 4020.25802285236841, 4004.01689018024035, 4000.80887965779220)
-
-    n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.exact(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 5
-    }
-  }
-*/
-  // TODO: Re-test after changes.
-  it ("Bessel approximation tests") {
-    val a = 1
-    var b = 1
-    // Real values for 10, 100, 1000
-    var realVal = IndexedSeq[Double](6.28318530717959, 6.28318530717959, 6.28318530717959)
-
-    var n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.bessel(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 10
-    }
-
-    b = 2
-    // Real values for 10, 100, 1000
-    realVal = IndexedSeq[Double](9.68844822054742, 9.68844822054768, 9.68844822054768)
-
-    n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.bessel(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 10
-    }
-
-    b = 10
-    // Real values for 10, 100, 1000
-    realVal = IndexedSeq[Double](40.63963178516602, 40.63974180100895, 40.63974180100895)
-
-    n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.bessel(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 10
-    }
-
-    b = 1000
-    // Real values for 10, 100, 1000
-    realVal = IndexedSeq[Double](3998.65719052395661, 4000.00902882897572, 4000.01558741091912)
-
-    n = 10
-    for (i <- realVal.indices){
-      assert(math.abs(EllipseMaster.bessel(a, b, n)/realVal(i) - 1) < 0.01)
-      n *= 10
-    }
   }
 
   /*
