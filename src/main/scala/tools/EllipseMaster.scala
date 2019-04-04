@@ -1,15 +1,13 @@
 package tools
 
+import scalismo.geometry
 import scalismo.geometry.{Point, _3D}
 import scalismo.mesh.TriangleMesh
-
-import scala.collection.mutable
-import scala.math.Ordering
-import scala.collection.mutable.ListBuffer
+import tools.ellipseCalculationMethod.ellipseCalculationMethod
 
 object  EllipseMaster {
 
-  def calculateCircumference(mesh: TriangleMesh[_3D], ellipsePost: Point[_3D], ellipseAnt: Point[_3D], ellipseSide: Point[_3D]): IndexedSeq[Double] = {
+  def calculateCircumference(mesh: TriangleMesh[_3D], ellipsePost: Point[_3D], ellipseAnt: Point[_3D], ellipseSide: Point[_3D], method: ellipseCalculationMethod): Double = {
 
     // Find true points on mesh
     val truePost = mesh.pointSet.findClosestPoint(ellipsePost).point
@@ -18,16 +16,34 @@ object  EllipseMaster {
 
     // Calculate a and b for ellipse
     // Assume right ellipse (a > b)
-    // For a find distance between
-    val a = distance(trueSide, (truePost - trueAnt).toPoint)
+    // For a find distance between the side and the midpoint between ant and post
+    val midpoint = (trueAnt.toVector + truePost.toVector)/2
+    val a = distance(trueSide, midpoint.toPoint)
     val b = distance(truePost, trueAnt)/2
     val n = 100
-
-    var circumference = new ListBuffer[Double]
-    circumference += numerical(a, b, n)
-    circumference += integral(a, b, n)
-
-    circumference.toIndexedSeq
+// TODO: Add AGM algorithm
+    method match {
+      case tools.ellipseCalculationMethod.NUMERICAL =>
+        numerical(a, b, n)
+      case tools.ellipseCalculationMethod.INTEGRAL =>
+        integral(a, b, n)
+      case tools.ellipseCalculationMethod.ANONYMOUS =>
+        anonymous(a, b)
+      case tools.ellipseCalculationMethod.HUDSON =>
+        hudson(a, b)
+      case tools.ellipseCalculationMethod.RAMANUJAN1 =>
+        ramanujan1(a, b)
+      case tools.ellipseCalculationMethod.RAMANUJAN2 =>
+        ramanujan2(a, b)
+      case tools.ellipseCalculationMethod.HOLDERHIGH =>
+        holderHigh(a, b)
+      case tools.ellipseCalculationMethod.HOLDERLOW =>
+        holderLow(a, b)
+      case tools.ellipseCalculationMethod.CANTRELL =>
+        cantrell(a, b)
+      case tools.ellipseCalculationMethod.UNKNOWN =>
+        -1.0
+    }
   }
 
   /* Approximations from http://paulbourke.net/geometry/ellipsecirc/
@@ -168,4 +184,12 @@ object  EllipseMaster {
     math.sqrt(math.pow(a.x - b.x,2) + math.pow(a.y - b.y,2) + math.pow(a.z - b.z,2))
   }
 
+}
+
+object ellipseCalculationMethod extends Enumeration {
+  type ellipseCalculationMethod = Value
+  val NUMERICAL, INTEGRAL, ANONYMOUS, HUDSON, RAMANUJAN1, RAMANUJAN2, HOLDERHIGH, HOLDERLOW, CANTRELL, UNKNOWN = Value
+
+  def withNameWithDefault(s: String): Value =
+    ellipseCalculationMethod.values.find(_.toString.toLowerCase == s.toLowerCase()).getOrElse(UNKNOWN)
 }
