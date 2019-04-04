@@ -8,7 +8,8 @@ import scalismo.geometry.{Landmark, _3D}
 import scalismo.io.{LandmarkIO, MeshIO}
 import scalismo.mesh.TriangleMesh
 import scalismo.utils.Random
-import tools.AStar
+import tools.{AStar, Utils, EllipseMaster, ellipseCalculationMethod}
+import tools.AStar.planeDistance
 
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
@@ -29,7 +30,7 @@ object Measurement {
 
         case "e" => // Start experiments
           aStarTest()
-          volumeTest()
+          //volumeTest()
 
         case "h" => // Help
           println("Learn how to use a computer you scrub\n")
@@ -184,37 +185,134 @@ object Measurement {
 
     // First load files
     // Extract meshs (.stl) and landmarks (.json)
-    val files = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sq")).sortBy(_.getName)
-    val trueDistance = files.filter(f => f.getName.contains(".stl")).map{f => f.getName.substring(0, f.getName.indexOf(".") - 2).toInt}
-    val dataset = files.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
-    val landmarks = files.filter(f => f.getName.contains(".json")).map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
+    val sqFiles = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sq")).sortBy(_.getName)
+    val trueDistance = sqFiles.filter(f => f.getName.contains(".stl")).map{f => f.getName.substring(0, f.getName.indexOf(".") - 2).toInt}
+    val sqDataset = sqFiles.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
+    val sqLandmarks = sqFiles.filter(f => f.getName.contains(".json")).map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
     var distance = new ListBuffer[Double]
-    var result = new ListBuffer[Boolean]
+    var sqResult = new ListBuffer[Boolean]
 
-    for (i <- dataset.indices){
-      val mesh = dataset(i)
-      val start = landmarks(i).toIndexedSeq(0).point
-      val end = landmarks(i).toIndexedSeq(1).point
+    for (i <- sqDataset.indices){
+      val mesh = sqDataset(i)
+      val start = sqLandmarks(i).toIndexedSeq(0).point
+      val end = sqLandmarks(i).toIndexedSeq(1).point
       distance += AStar.calculateDistance(mesh, start, end)
-      result += distance(i) == trueDistance(i)
+      sqResult += distance(i) == trueDistance(i)
     }
 
-    println(result.mkString("\n"))
+    println("Square length test")
+    println(sqResult.mkString("\n"))
+
+    // Check if refLandmarks.json exists - Landmark file
+    if (!Files.exists(Paths.get("data/inkreate-ref/inkreateRefLandmarks.json"))) {
+      println("Landmark file - inkreateRefLandmarks.json not found. Returning to previous menu")
+      return
+    }
+
+    // The reference landmarks are based on shape 0 in the training set
+    val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate-ref/inkreateRefLandmarks.json")).get
+
+    // First load files
+    val bodyFiles = new File("data/inkreate/").listFiles.sortBy(f => f.getName)
+    val bodyDataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
+    val reference = bodyDataset.head
+
+    // Read file
+    val csvSRC = Source.fromFile("data/inkreate-ref/measurements.csv")
+    // Read line by line using iterator. Drop first two lines
+    val iter = csvSRC.getLines().drop(2).map(_.split(","))
+    // Collection for heights
+    var csvWaistGirth = new ListBuffer[Double]()
+    // Extract each height (in column 51 = AZ)
+    while (iter.hasNext){
+      csvWaistGirth += iter.next()(51).toDouble
+    }
+
+    println("Data loaded")
+
+    // Get point ID of the relevant landmarks using the reference mesh
+    // Assume filter has one result. Get it
+    val waistAntID = reference.pointSet.findClosestPoint(inkreateRefLandmarks.filter(p => p.id == "WaistAnt").head.point).id
+    val waistPostID = reference.pointSet.findClosestPoint(inkreateRefLandmarks.filter(p => p.id == "WaistPost").head.point).id
+    val waistRtID = reference.pointSet.findClosestPoint(inkreateRefLandmarks.filter(p => p.id == "WaistRt").head.point).id
+
+    val aStarGirth: IndexedSeq[Double] = bodyDataset.map{ mesh =>
+      // Get the points from the point ID
+      val waistAnt = mesh.pointSet.point(waistAntID)
+      val waistPost = mesh.pointSet.point(waistPostID)
+      val waistRt = mesh.pointSet.point(waistRtID)
+
+      val girth: Double = AStar.calculateDistance(mesh, waistAnt, waistPost)
+      girth * 2
+    }
+
+    // Get and IndexedSeq of IndexedSeq[Double]. Produces girth calculations for all
+    val methods = List("Anonymous", "Cantrell", "HolderHigh", "HolderLow", "Hudson", "Integral", "Numerical", "Ramanujan1", "Ramanujan2")
+    val  ellipseGirth: IndexedSeq[IndexedSeq[Double]] = bodyDataset.map{ mesh: TriangleMesh[_3D] =>
+      // Get the points from the point ID
+      val waistAnt = mesh.pointSet.point(waistAntID)
+      val waistPost = mesh.pointSet.point(waistPostID)
+      val waistRt = mesh.pointSet.point(waistRtID)
+
+      // List ellipse calculation methods
+      // For each method calculate circumference
+      val holder: IndexedSeq[Double] = methods.map{method: String =>
+        EllipseMaster.calculateCircumference(mesh, waistAnt, waistPost, waistRt, ellipseCalculationMethod.withNameWithDefault(method))
+      }.toIndexedSeq
+      holder
+    }
+
+    val ellipseGirthTransposed = ellipseGirth.transpose.map{ f => f.toList}
+
+    var csvFields = ListBuffer("Ground Truth", "AStar Basic")
+    csvFields ++= methods
+
+    // Extract all data
+    var allData = new ListBuffer[Seq[Any]]
+    allData += csvWaistGirth.toList
+    allData += aStarGirth.toList
+    allData ++= ellipseGirthTransposed
+    val directory = "data/waistCircumferenceTest.csv"
+    Utils.csvWrite(csvFields, allData.toList, directory)
+
+    println("Results written to file")
+
   }
 
   private def volumeTest(): Unit = {
-    val files = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sq")).sortBy(_.getName)
-    val trueVolume = files.filter(f => f.getName.contains(".stl")).map{f => math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
-    val dataset = files.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
 
-    for (i <- dataset.indices){
-      val mesh = dataset(i)
-      val vol = getMeshVolume(mesh)
-      println(vol == trueVolume(i))
+    scalismo.initialize()
+
+    val files = new File("data/distance-test/").listFiles
+    val sqFiles = files.filter(f => f.getName.contains("sq")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
+    val sqTrueVolume = sqFiles.map{f => math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
+    val sqDataset = sqFiles.map{f => MeshIO.readMesh(f).get}
+    var  sqVol = new ListBuffer[Double]
+
+    for (i <- sqDataset.indices){
+      val mesh = sqDataset(i)
+      sqVol += getMeshVolume(mesh)
     }
+
+    val spFiles = new File("data/volume-test/").listFiles.filter(f => f.getName.contains("sp")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
+    val spTrueVolume =  spFiles.filter(f => f.getName.contains(".stl")).map{f => (4.0/3.0) * math.Pi * math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
+    val spDataset = spFiles.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
+    var spVol = new ListBuffer[Double]
+
+    for (i <- spDataset.indices){
+      val mesh = spDataset(i)
+      spVol += getMeshVolume(mesh)
+    }
+
+    val trueShape1Vol = 96540.29
+    val shape1 = new File("data/volume-test/").listFiles.filter(f => f.getName.contains("Shape1")).filter(f => f.getName.contains(".stl")).sortBy(_.getName).map{f => MeshIO.readMesh(f).get}.head
+    val shape1Vol = getMeshVolume(shape1)
+
+    println("Done")
+
   }
 
-  private def getMeshVolume(mesh: TriangleMesh[_3D]): Double = {
+  def getMeshVolume(mesh: TriangleMesh[_3D]): Double = {
     // Convert TriangleMesh[_3D] to vtkPolyData
     val vtkMesh = scalismo.utils.MeshConversion.meshToVtkPolyData(mesh)
     // Create new vtk mass properties object
