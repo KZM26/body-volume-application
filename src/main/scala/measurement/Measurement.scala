@@ -228,7 +228,7 @@ object Measurement {
     val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate-ref/inkreateRefLandmarks.json")).get
 
     // First load files
-    val bodyFiles = new File("data/inkreate/").listFiles.filter{p: File => p.getName.contains("000")}.sortBy(f => f.getName)
+    val bodyFiles = new File("data/inkreate/").listFiles.sortBy(f => f.getName)
     val bodyDataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
     val reference = bodyDataset.head
 
@@ -262,6 +262,25 @@ object Measurement {
       girth * 2
     }
 
+    val aStarXZGirth: IndexedSeq[Double] = bodyDataset.map{ mesh =>
+      // Get the points from the point ID
+      val waistAnt = mesh.pointSet.point(waistAntID)
+      val waistPost = mesh.pointSet.point(waistPostID)
+
+      val girth: Double = AStar.calculateXZPlaneDistance(mesh, waistAnt, waistPost)
+      girth * 2
+    }
+
+    val aStarPlaneGirth: IndexedSeq[Double] = bodyDataset.map{ mesh =>
+      // Get the points from the point ID
+      val waistAnt = mesh.pointSet.point(waistAntID)
+      val waistPost = mesh.pointSet.point(waistPostID)
+      val waistRt = mesh.pointSet.point(waistRtID)
+
+      val girth: Double = AStar.calculatePlaneDistance(mesh, waistAnt, waistPost, waistRt)
+      girth * 2
+    }
+
     // Get and IndexedSeq of IndexedSeq[Double]. Produces girth calculations for all
     //val methods = List("Anonymous", "Cantrell", "HolderHigh", "HolderLow", "Hudson", "Integral", "Numerical", "Ramanujan1", "Ramanujan2")
     val methods = List("Ramanujan2")
@@ -281,13 +300,15 @@ object Measurement {
 
     val ellipseGirthTransposed = ellipseGirth.transpose.map{ f => f.toList}
 
-    var csvFields = ListBuffer("Ground Truth", "AStar Basic")
+    var csvFields = ListBuffer("Ground Truth", "AStar Basic", "AStar Projection Plane", "AStar XZ Plane")
     csvFields ++= methods
 
     // Extract all data
     var allData = new ListBuffer[Seq[Any]]
     allData += csvWaistGirth.toList
     allData += aStarGirth.toList
+    allData += aStarPlaneGirth.toList
+    allData += aStarXZGirth.toList
     allData ++= ellipseGirthTransposed
     val directory = "data/waistCircumferenceTest.csv"
     Utils.csvWrite(csvFields, allData.toList, directory)
