@@ -29,7 +29,8 @@ object Measurement {
           measure()
 
         case "e" => // Start experiments
-          aStarTest()
+          waistCircumferenceTest()
+          heightTest()
           //volumeTest()
 
         case "h" => // Help
@@ -62,7 +63,7 @@ object Measurement {
 
   }
 
-  private def heightExperiment() : Unit ={
+  private def heightTest() : Unit ={
 
     // Measure height of all and WC of all
 
@@ -93,8 +94,8 @@ object Measurement {
     val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate-ref/inkreateRefLandmarks.json")).get
 
     // First load files
-    val files = new File("data/inkreate/").listFiles
-    val dataset = files.map{f => MeshIO.readMesh(f).get}
+    val bodyFiles = new File("data/inkreate/").listFiles
+    val dataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
     val reference = dataset.head
 
     // Read file
@@ -104,9 +105,11 @@ object Measurement {
     // Collection for heights
     var csvHeight = new ListBuffer[Int]()
     // Extract each height (in column 2)
-    while (iter.hasNext){
+    for (i <- bodyFiles.indices){
       csvHeight += iter.next()(2).toInt
     }
+
+
 
     println("Data loaded")
 
@@ -141,6 +144,18 @@ object Measurement {
     }.toIndexedSeq
 
     println("Done")
+
+    val csvFields = ListBuffer("Ground Truth", "Point Height")
+
+    // Extract all data
+    var allData = new ListBuffer[Seq[Any]]
+    allData += csvHeight.toList
+    allData += pointHeight.toList
+    val directory = "data/heightTest.csv"
+    Utils.csvWrite(csvFields, allData.toList, directory)
+
+    println("Results written to file")
+
 /*
     val meshNumber = 12
     val mesh = dataset(meshNumber)
@@ -177,7 +192,7 @@ object Measurement {
 
   }
 
-  private def aStarTest(): Unit = {
+  private def waistCircumferenceTest(): Unit = {
 
     scalismo.initialize()
 
@@ -213,10 +228,11 @@ object Measurement {
     val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate-ref/inkreateRefLandmarks.json")).get
 
     // First load files
-    val bodyFiles = new File("data/inkreate/").listFiles.sortBy(f => f.getName)
+    val bodyFiles = new File("data/inkreate/").listFiles.filter{p: File => p.getName.contains("000")}.sortBy(f => f.getName)
     val bodyDataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
     val reference = bodyDataset.head
 
+    // Read out the same number of values from csv as there are body files
     // Read file
     val csvSRC = Source.fromFile("data/inkreate-ref/measurements.csv")
     // Read line by line using iterator. Drop first two lines
@@ -224,7 +240,7 @@ object Measurement {
     // Collection for heights
     var csvWaistGirth = new ListBuffer[Double]()
     // Extract each height (in column 51 = AZ)
-    while (iter.hasNext){
+    for (i <- bodyFiles.indices){
       csvWaistGirth += iter.next()(51).toDouble
     }
 
@@ -247,7 +263,8 @@ object Measurement {
     }
 
     // Get and IndexedSeq of IndexedSeq[Double]. Produces girth calculations for all
-    val methods = List("Anonymous", "Cantrell", "HolderHigh", "HolderLow", "Hudson", "Integral", "Numerical", "Ramanujan1", "Ramanujan2")
+    //val methods = List("Anonymous", "Cantrell", "HolderHigh", "HolderLow", "Hudson", "Integral", "Numerical", "Ramanujan1", "Ramanujan2")
+    val methods = List("Ramanujan2")
     val  ellipseGirth: IndexedSeq[IndexedSeq[Double]] = bodyDataset.map{ mesh: TriangleMesh[_3D] =>
       // Get the points from the point ID
       val waistAnt = mesh.pointSet.point(waistAntID)
