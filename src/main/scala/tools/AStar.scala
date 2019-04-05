@@ -15,13 +15,38 @@ object AStar {
     val trueStart = mesh.pointSet.findClosestPoint(start).point
     val trueEnd = mesh.pointSet.findClosestPoint(end).point
 
-    val (cameFrom, cost)= aStarSearch(mesh, trueStart, trueEnd)
+    val (cameFrom, cost) = aStarSearch(mesh, trueStart, trueEnd)
     val path = reconstructPath(cameFrom, trueStart, trueEnd)
     pathDistance(path)
 
   }
 
+  def calculatePlaneDistance(mesh: TriangleMesh[_3D], start: Point[_3D], end: Point[_3D], planePoint: Point[_3D]): Double = {
+
+    // Find true start and end as landmark point != point on mesh
+    val trueStart = mesh.pointSet.findClosestPoint(start).point
+    val trueEnd = mesh.pointSet.findClosestPoint(end).point
+
+    val (cameFrom, cost) = aStarSearch(mesh, trueStart, trueEnd)
+    val path = reconstructPath(cameFrom, trueStart, trueEnd)
+    smoothPath(path, planePoint)
+
+  }
+
+  def calculateXZPlaneDistance(mesh: TriangleMesh[_3D], start: Point[_3D], end: Point[_3D]): Double = {
+
+    // Find true start and end as landmark point != point on mesh
+    val trueStart = mesh.pointSet.findClosestPoint(start).point
+    val trueEnd = mesh.pointSet.findClosestPoint(end).point
+
+    val (cameFrom, cost) = aStarSearch(mesh, trueStart, trueEnd)
+    val path = reconstructPath(cameFrom, trueStart, trueEnd)
+    xzPlanePathDistance(path)
+
+  }
+
   // Define ordering case class and metric extraction
+  // Default sorts by max so make pc negative to sort by min
   private case class PointCost(point: Point[_3D], cost: Double)
   private def getPointCostCost(pc: PointCost) = -pc.cost
 
@@ -120,7 +145,7 @@ object AStar {
   private def reconstructPath(cameFrom: ListBuffer[PointFrom], start: Point[_3D], end: Point[_3D]): ListBuffer[Point[_3D]] = {
     var current = end
     var path = new ListBuffer[Point[_3D]]
-    
+
     // Start at the end and work backwards till current is the start
     while (!pointsEqual(current, start)) {
       // Add current point to path
@@ -132,6 +157,36 @@ object AStar {
     // Add start to path and return a reversed path
     path += start
     path.reverse
+  }
+
+  /**
+    * Calculate smoothed distance from path
+    *
+    * Parameters:
+    *    -   `path` list of points representing the path
+
+    * Returns:
+    *    -  Length of path
+    */
+  private def smoothPath(path: ListBuffer[Point[_3D]], planePoint: Point[_3D]): Double ={
+    val start = path.head
+    val end = path.last
+
+    var length: Double = 0.0
+
+    if (path.length > 2){
+      for (in <- 0 until (path.length - 1)){
+        val pointA = path(in)
+        val pointB = path(in + 1)
+
+        length += planeDistance(start, planePoint, end, pointA, pointB)
+      }
+    }
+    else {
+      length = pathDistance(path)
+    }
+
+    length
   }
 
   /**
@@ -148,7 +203,17 @@ object AStar {
     var length: Double = 0.0
 
     for (i <- 0 until (path.length - 1))
-      length += this.heuristic(path(i), path(i + 1))
+      length += heuristic(path(i), path(i + 1))
+
+    length
+  }
+
+  private def xzPlanePathDistance(path: ListBuffer[Point[_3D]]): Double = {
+
+    var length: Double = 0.0
+
+    for (i <- 0 until (path.length - 1))
+      length += xzPlaneDistance(path(i), path(i + 1))
 
     length
   }
@@ -182,4 +247,33 @@ object AStar {
     (a.x == b.x) && (a.y == b.y) && (a.z == b.z)
   }
 
+  private def planeDistance(start: Point[_3D], middle: Point[_3D], end: Point[_3D], pointA: Point[_3D], pointB: Point[_3D]): Double = {
+
+    val vecA = middle.toVector - start.toVector
+    val vecB = end.toVector - start.toVector
+
+    val a = vecA.y * vecB.z - vecA.z * vecB.y
+    val b = vecA.z * vecB.x - vecA.x * vecB.z
+    val c = vecA.x * vecB.y - vecA.y * vecB.x
+
+    val abc = a * a + b * b + c * c
+
+    val tA = (a * (start.x - pointA.x) + b * (start.y - pointA.y) + c * (start.z - pointA.z))/abc
+    val tB = (a * (start.x - pointB.x) + b * (start.y - pointB.y) + c * (start.z - pointB.z))/abc
+
+    val xA = pointA.x + a * tA
+    val yA = pointA.y + b * tA
+    val zA = pointA.z + c * tA
+
+    val xB = pointB.x + a * tB
+    val yB = pointB.y + b * tB
+    val zB = pointB.z + c * tB
+
+    math.sqrt(math.pow(xA - xB, 2) + math.pow(yA - yB, 2) + math.pow(zA - zB, 2))
+  }
+
+  // Calculate distance in xz plane (ie: y value is 0 and ignored in calculation)
+  private def xzPlaneDistance(a: Point[_3D], b: Point[_3D]): Double = {
+    math.sqrt(math.pow(a.x - b.x,2) + math.pow(a.z - b.z,2))
+  }
 }
