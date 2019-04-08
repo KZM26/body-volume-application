@@ -1,14 +1,14 @@
 package validation
 
-import build.Build
-
 import java.io.File
 
+import build.Build
 import scalismo.geometry._3D
 import scalismo.io.MeshIO
 import scalismo.mesh.{MeshMetrics, TriangleMesh}
 import scalismo.statisticalmodel.StatisticalMeshModel
 import scalismo.statisticalmodel.dataset.DataCollection
+import tools.Utils
 
 object Generalisation {
 
@@ -16,9 +16,10 @@ object Generalisation {
     scalismo.initialize()
 
     // Build GPMM from aligned data
+
     val dataset = new File(datasetPath).listFiles.map{f => MeshIO.readMesh(f).get}
 
-    val path = "data/ref_landmarks/refLandmarks.json"
+    val path = "data/ref-landmarks/refLandmarks.json"
     val alignedSet = Build.alignMesh(dataset, path)
 
     val dc : DataCollection = DataCollection.fromMeshSequence(alignedSet.head, alignedSet.tail)(scalismo.utils.Random.apply(0))._1.get
@@ -65,10 +66,16 @@ object Generalisation {
     val distances = for(pca<- gpModelSeq) yield {
       val proj : TriangleMesh[_3D] = pca.project(projMesh)
       MeshMetrics.avgDistance(proj,projMesh)
-      val dist = distance match {
-        case avg => MeshMetrics.avgDistance(proj,projMesh)
-        case rms => MeshMetrics.procrustesDistance(proj,projMesh)
-        case hausdorff => MeshMetrics.hausdorffDistance(proj,projMesh)
+      val dist = distance.toLowerCase match {
+
+        case "avg" =>
+          MeshMetrics.avgDistance(proj,projMesh)
+
+        case "rms" =>
+          MeshMetrics.procrustesDistance(proj,projMesh)
+
+        case "hausdorff" =>
+          Hausdorff.modifiedHausdorffDistance(proj,projMesh)
       }
       dist
     }

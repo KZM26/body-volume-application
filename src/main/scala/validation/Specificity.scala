@@ -9,6 +9,7 @@ import scalismo.io._
 import scalismo.statisticalmodel.dataset._
 import scalismo.statisticalmodel._
 import scalismo.mesh._
+import tools.Utils
 
 object Specificity {
 
@@ -46,17 +47,17 @@ object Specificity {
 
       val dist = distance.toLowerCase match {
 
-        case avg =>
+        case "avg" =>
           data.map { m =>
             MeshMetrics.avgDistance(m, sample)
           }.min
 
-        case rms =>
+        case "rms" =>
           data.map { m =>
             MeshMetrics.procrustesDistance(m, sample)
           }.min
 
-        case hausdorff =>
+        case "hausdorff" =>
           data.map { m =>
             Hausdorff.modifiedHausdorffDistance(m, sample)
           }.min
