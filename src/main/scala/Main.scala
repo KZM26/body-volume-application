@@ -1,6 +1,7 @@
 // Packages
 import preprocessor.Preprocessor
 import build.Build
+import fitting.Fitting
 import measurement.Measurement
 
 // Main
@@ -18,19 +19,16 @@ object Main extends App{
       input match{
 
           case "b" => // Buildz`
-            val build = new Build
-            build.start()
+            Build.start()
 
           case "f" => // Fitting
-            // TODO
+            Fitting.start()
 
           case "m" => // Measurement
-            val measure = new Measurement
-            measure.start()
+            Measurement.start()
 
           case "p" => // Preprocessor
-            val processor = new Preprocessor
-            processor.start()
+            Preprocessor.start()
 
           case "h" => // Help
             println("Learn how to use a computer you scrub\n")
