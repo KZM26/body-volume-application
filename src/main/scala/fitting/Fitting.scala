@@ -4,19 +4,19 @@ import java.io.File
 
 import breeze.linalg.{DenseMatrix, DenseVector}
 import scalismo.common.PointId
-import scalismo.faces.io.TLMSLandmarksIO
+import scalismo.faces.io.{PixelImageIO, TLMSLandmarksIO}
 import scalismo.geometry._
-import scalismo.io.{LandmarkIO, MeshIO, StatismoIO}
+import scalismo.io.{ImageIO, LandmarkIO, StatismoIO}
 import scalismo.mesh.TriangleMesh
-import scalismo.registration.{RigidTransformation, RigidTransformationSpace, RotationTransform, TranslationTransform}
+import scalismo.registration.{RigidTransformation, RotationTransform, TranslationTransform}
 import scalismo.sampling.algorithms.MetropolisHastings
 import scalismo.sampling.evaluators.ProductEvaluator
 import scalismo.sampling.proposals.MixtureProposal
-import scalismo.sampling.loggers.AcceptRejectLogger
 import scalismo.sampling.{DistributionEvaluator, ProposalGenerator, TransitionProbability}
 import scalismo.statisticalmodel.{MultivariateNormalDistribution, StatisticalMeshModel}
-import scalismo.ui.api.{Group, ScalismoUI, ShowInScene}
+import scalismo.ui.api.{ScalismoUI, ShowInScene}
 import scalismo.utils.Memoize
+import measurement.Measurement
 
 object Fitting {
 
@@ -26,7 +26,7 @@ object Fitting {
   println("Done")
 
   def start(): Unit = {
-    val fittingConfig = List("Start measurements (f)", "Experiments (e)", "Help (h)", "Quit (q)\n")
+    val fittingConfig = List("Start image fitting (f)", "Experiments (e)", "Help (h)", "Quit (q)\n")
 
     var input = ""
 
@@ -69,13 +69,22 @@ object Fitting {
     val modelView = ui.show(modelGroup, model, "model")
     modelView.meshView.opacity = 0.5
 
-    val modelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/minimal.json")).get
-    val modelLmViews = ui.show(modelGroup, modelLm, "modelLandmarks")
-    modelLmViews.foreach(lmView => lmView.color = java.awt.Color.BLUE)
+    val modelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/spring-minimal.json")).get
+    //val modelLmViews = ui.show(modelGroup, modelLm, "modelLandmarks")
+    //modelLmViews.foreach(lmView => lmView.color = java.awt.Color.BLUE)
 
-    val targetGroup = ui.createGroup("target")
+    //val targetGroup = ui.createGroup("target")
 
-    val targetLm = TLMSLandmarksIO.read2D(new File("data/image-landmarks/000.tlms")).get.map{TLMSLandmark => TLMSLandmark.toLandmark}
+    val imgLm = TLMSLandmarksIO.read2D(new File("data/image-landmarks/000.tlms")).get.map{TLMSLandmark => TLMSLandmark.toLandmark}
+
+    val realHeight = 1.7
+    val lmHeight = imgLm.filter{p => p.id == "metatarsal-phalangeal.i.rt"}.head.point.y - imgLm.filter{p => p.id == "crown"}.head.point.y
+    val scaleFactor = lmHeight/realHeight
+    val targetLm: IndexedSeq[Landmark[_2D]] = imgLm.map{l =>
+      val newPoint = Vector(l.point.x / scaleFactor, l.point.y / scaleFactor).toPoint
+      new Landmark[_2D](l.id, newPoint)
+    }
+
     /*val targetLmViews = ui.show(targetGroup, targetLm, "targetLandmarks")
     modelLmViews.foreach(lmView => lmView.color = java.awt.Color.RED)
 */
@@ -86,6 +95,18 @@ object Fitting {
     val bestFit = model.instance(bestSample.parameters.modelCoefficients).transform(bestSample.poseTransformation)
     val resultGroup = ui.createGroup("result")
     ui.show(resultGroup, bestFit, "best fit")
+
+    val bestFitHeight = Measurement.measurePointHeight(bestFit)
+
+    val waistAntID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.anterior").head.point).id
+    val waistPostID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.posterior").head.point).id
+    val bestFitWC = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID))
+
+    val bodyFat = Measurement.getBodyFatPercentage(bestFit, bestFitHeight, 64, 24, Measurement.sexEnum.MALE)
+
+    println(bestFitHeight)
+    println(bestFitWC)
+    println(bodyFat)
 
   }
 
@@ -118,9 +139,9 @@ object Fitting {
     val rotationUpdateProposal = RotationUpdateProposal(0.01)
     val translationUpdateProposal = TranslationUpdateProposal(1.0)
     val generator = MixtureProposal.fromProposalsWithTransition(
-      (0.6, shapeUpdateProposal),
-      (0.2, rotationUpdateProposal),
-      (0.2, translationUpdateProposal)
+      (0.7, shapeUpdateProposal),
+      (0.3, rotationUpdateProposal),
+      (0.0, translationUpdateProposal)
     )
 
     // Set initialisation values
@@ -153,6 +174,7 @@ object Fitting {
     mesh.pointSet.points.foldLeft(Point(0, 0, 0))((sum, point) => sum + point.toVector * normFactor)
   }
 
+  // 2D image marginalisation
   private def marginalizeModelForCorrespondences(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_2D], MultivariateNormalDistribution)]):
   (StatisticalMeshModel, Seq[(PointId, Point[_2D], MultivariateNormalDistribution)]) = {
 
@@ -166,7 +188,22 @@ object Fitting {
     }
     (marginalizedModel, newCorrespondences)
   }
+/*
+  // 3D mesh marginalisation
+  private def marginalizeModelForCorrespondences(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_3D], MultivariateNormalDistribution)]):
+  (StatisticalMeshModel, Seq[(PointId, Point[_3D], MultivariateNormalDistribution)]) = {
 
+    val (modelIds, _, _) = correspondences.unzip3
+    val marginalizedModel = model.marginal(modelIds.toIndexedSeq)
+    val newCorrespondences = correspondences.map{ idWithTargetPoint =>
+      val (id, targetPoint, uncertainty) = idWithTargetPoint
+      val modelPoint = model.referenceMesh.pointSet.point(id)
+      val newId = marginalizedModel.referenceMesh.pointSet.findClosestPoint(modelPoint).id
+      (newId, targetPoint, uncertainty)
+    }
+    (marginalizedModel, newCorrespondences)
+  }
+*/
   // Case classes
   case class Parameters(translationParameters: Vector[_3D], rotationParameters: (Double, Double, Double), modelCoefficients: DenseVector[Double])
 
@@ -200,6 +237,7 @@ object Fitting {
     }
   }
 
+  // 3D mesh vs 2D image
   private case class SimpleCorrespondenceEvaluator(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_2D], MultivariateNormalDistribution)])
     extends DistributionEvaluator[Sample] {
 
@@ -210,10 +248,8 @@ object Fitting {
       val likelihoods = correspondences.map{correspondence => {
         val (id, targetPoint, uncertainty) = correspondence
         val modelInstancePoint = currModelInstance.pointSet.point(id)
-        val truncInstance: Vector[_2D] = Vector(modelInstancePoint.x, modelInstancePoint.y)
-        //val augTarget: Vector[_3D] = Vector(targetPoint.x, targetPoint.y, modelInstancePoint.z)
+        val truncInstance: Vector[_2D] = Vector(modelInstancePoint.y, modelInstancePoint.z)
         val observedDeformation = targetPoint - truncInstance
-        //val observedDeformation = augTarget.toPoint - modelInstancePoint
 
         uncertainty.logpdf(observedDeformation.toBreezeVector)
       }}
@@ -224,6 +260,7 @@ object Fitting {
     }
   }
 
+  // 3D mesh vs 2D image
   private case class CorrespondenceEvaluator(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_2D], MultivariateNormalDistribution)])
     extends DistributionEvaluator[Sample] {
 
@@ -236,10 +273,8 @@ object Fitting {
       val likelihoods = newCorrespondences.map{correspondence =>
         val (id, targetPoint, uncertainty) = correspondence
         val modelInstancePoint = currModelInstance.pointSet.point(id)
-        val truncInstance: Vector[_2D] = Vector(modelInstancePoint.x, modelInstancePoint.y)
-        //val augTarget: Vector[_3D] = Vector(targetPoint.x, targetPoint.y, modelInstancePoint.z)
+        val truncInstance: Vector[_2D] = Vector(modelInstancePoint.y, modelInstancePoint.z)
         val observedDeformation = targetPoint - truncInstance
-        //val observedDeformation = augTarget.toPoint - modelInstancePoint
 
         uncertainty.logpdf(observedDeformation.toBreezeVector)
       }
@@ -250,6 +285,7 @@ object Fitting {
     }
   }
 /*
+  // 3D mesh vs 3D mesh
   private case class SimpleCorrespondenceEvaluator(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_3D], MultivariateNormalDistribution)])
     extends DistributionEvaluator[Sample] {
 
@@ -271,6 +307,7 @@ object Fitting {
     }
   }
 
+  // 3D mesh vs 3D mesh
   private case class CorrespondenceEvaluator(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_3D], MultivariateNormalDistribution)])
     extends DistributionEvaluator[Sample] {
 
