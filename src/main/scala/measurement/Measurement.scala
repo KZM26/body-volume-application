@@ -3,13 +3,11 @@ package measurement
 import java.io.File
 import java.nio.file.{Files, Paths}
 
-import scalismo.common.PointId
-import scalismo.geometry.{Landmark, _3D}
+import scalismo.geometry.{Landmark, Point, _3D}
 import scalismo.io.{LandmarkIO, MeshIO}
 import scalismo.mesh.TriangleMesh
-import scalismo.utils.Random
-import tools.{AStar, Utils, EllipseMaster, ellipseCalculationMethod}
-import tools.AStar.planeDistance
+import tools.{AStar, EllipseMaster, Utils, ellipseCalculationMethod}
+import measurement.Measurement.sexEnum.sexEnum
 
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
@@ -26,10 +24,10 @@ object Measurement {
       input match {
 
         case "s" => // Start measurements
-          measure()
+          //TODO
 
         case "e" => // Start experiments
-          waistCircumferenceTest()
+          //waistCircumferenceTest()
           heightTest()
           //volumeTest()
 
@@ -53,14 +51,16 @@ object Measurement {
     }
   }
 
-  private def measure() : Unit ={
+  def measurePointHeight(mesh: TriangleMesh[_3D]): Double ={
 
     // Measure height
     // Height = ABS Diff between max and min vertex
+    val meshSeq = mesh.pointSet.points.toIndexedSeq
 
-    // Measure WC
-    // Surface distance from waist preferred posterior. Maintain z coordinate
+    val maxY = meshSeq.maxBy(f => f.y).y
+    val minY = meshSeq.minBy(f => f.y).y
 
+    maxY - minY
   }
 
   private def heightTest() : Unit ={
@@ -126,21 +126,8 @@ object Measurement {
       pointIDs += pid.get.id
     }
 
-    val pointHeight : IndexedSeq[Int] = dataset.map{mesh =>
-
-      val it2 = mesh.pointSet.points
-      var pt = it2.next()
-      var maxY = pt.y
-      var minY = pt.y
-
-      while (it2.hasNext){
-        pt = it2.next()
-        if (maxY < pt.y) maxY = pt.y
-        if (minY > pt.y) minY = pt.y
-      }
-
-      val pointHeight : Int = Math.abs(maxY - minY).toInt
-      pointHeight
+    val pointHeight : IndexedSeq[Double] = dataset.map{mesh =>
+      measurePointHeight(mesh)
     }.toIndexedSeq
 
     println("Done")
@@ -150,7 +137,7 @@ object Measurement {
     // Extract all data
     var allData = new ListBuffer[Seq[Any]]
     allData += csvHeight.toList
-    allData += pointHeight.toList
+    allData += pointHeight.map{h => math.round(h)}.toList
     val directory = "data/heightTest.csv"
     Utils.csvWrite(csvFields, allData.toList, directory)
 
@@ -361,5 +348,55 @@ object Measurement {
     mass.GetVolume()
   }
 
+  def getBodyFatPercentage(mesh: TriangleMesh[_3D], height: Double, mass: Double, age: Int, sex: sexEnum): Double = {
+    // Get volume in litres. Scale up from mm3 to l
+    val bodyVolumeRaw = getMeshVolume(mesh) * 1e+3
+    var frc = 0.0
+    var vt = 0.0
+
+    // Set functional residual capacity (FRC) based on height, age, and sex. Set tidal volume (VT) based on sex
+    if (sex == sexEnum.FEMALE){
+      frc = 0.0360 * height + 0.0031 * age - 3.182
+      vt = 0.7
+    }
+    else {
+      frc = 0.0472 * height + 0.0090 * age - 5.290
+      vt = 1.2
+    }
+
+    // Determine thoracic gas volume (TGV)
+    val tgv = frc + 0.5 * vt
+
+    val bodyVolumeCorrected = bodyVolumeRaw + 0.4 * tgv
+    val bodyDensity = mass/bodyVolumeCorrected
+
+    // Determine body fat percentage using Siri or Brožek based on BMI
+    // Assume height given in meters
+    var bodyFat = 0.0
+    val bmi = mass/(height * height)
+
+    if (18.5 <= bmi && bmi <= 30){
+      // Siri, 1956
+      bodyFat = 100 * ((4.95/bodyDensity) - 4.50)
+    }
+    else {
+      // Brožek 1963
+      bodyFat = 100 * ((4.57/bodyDensity) - 4.142)
+    }
+
+    bodyFat
+  }
+
+  def getWaistCircumference(mesh: TriangleMesh[_3D], waistAnt: Point[_3D], waistPost: Point[_3D]): Double = {
+    AStar.calculateXZPlaneDistance(mesh, waistAnt, waistPost) * 2
+  }
+
+  object sexEnum extends Enumeration {
+    type sexEnum= Value
+    val FEMALE, MALE, UNKNOWN = Value
+
+    def withNameWithDefault(s: String): Value =
+      sexEnum.values.find(_.toString.toLowerCase == s.toLowerCase()).getOrElse(UNKNOWN)
+  }
 
 }
