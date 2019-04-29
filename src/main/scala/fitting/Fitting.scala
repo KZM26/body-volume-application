@@ -17,13 +17,11 @@ import scalismo.statisticalmodel.{MultivariateNormalDistribution, StatisticalMes
 import scalismo.ui.api.{ScalismoUI, ShowInScene}
 import scalismo.utils.Memoize
 import measurement.Measurement
+import fitting.Fitting.orientationEnum.orientationEnum
 
 object Fitting {
 
   implicit private val rng: scalismo.utils.Random = scalismo.utils.Random(42)
-  println("Initialising Scalismo")
-  scalismo.initialize()
-  println("Done")
 
   def start(): Unit = {
     val fittingConfig = List("Start image fitting (f)", "Experiments (e)", "Help (h)", "Quit (q)\n")
@@ -74,14 +72,21 @@ object Fitting {
     //modelLmViews.foreach(lmView => lmView.color = java.awt.Color.BLUE)
 
     //val targetGroup = ui.createGroup("target")
+    val realHeight = 2
 
-    val imgLm = TLMSLandmarksIO.read2D(new File("data/image-landmarks/000.tlms")).get.map{TLMSLandmark => TLMSLandmark.toLandmark}
+    val imgLmFront = TLMSLandmarksIO.read2D(new File("data/image-landmarks/000-front.tlms")).get.map{TLMSLandmark => TLMSLandmark.toLandmark}
+    val lmHeightFront = imgLmFront.filter{p => p.id == "metatarsal-phalangeal.i.rt"}.head.point.y - imgLmFront.filter{p => p.id == "crown"}.head.point.y
+    val scaleFactorFront = lmHeightFront/realHeight
+    val targetLmFront: IndexedSeq[Landmark[_2D]] = imgLmFront.map{l =>
+      val newPoint = Vector(l.point.x / scaleFactorFront, l.point.y / scaleFactorFront).toPoint
+      new Landmark[_2D](l.id, newPoint)
+    }
 
-    val realHeight = 1.7
-    val lmHeight = imgLm.filter{p => p.id == "metatarsal-phalangeal.i.rt"}.head.point.y - imgLm.filter{p => p.id == "crown"}.head.point.y
-    val scaleFactor = lmHeight/realHeight
-    val targetLm: IndexedSeq[Landmark[_2D]] = imgLm.map{l =>
-      val newPoint = Vector(l.point.x / scaleFactor, l.point.y / scaleFactor).toPoint
+    val imgLmSide = TLMSLandmarksIO.read2D(new File("data/image-landmarks/000-side.tlms")).get.map{TLMSLandmark => TLMSLandmark.toLandmark}
+    val lmHeightSide = imgLmSide.filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - imgLmSide.filter{p => p.id == "crown"}.head.point.y
+    val scaleFactorSide = lmHeightSide/realHeight
+    val targetLmSide: IndexedSeq[Landmark[_2D]] = imgLmFront.map{l =>
+      val newPoint = Vector(l.point.x / scaleFactorSide, l.point.y / scaleFactorSide).toPoint
       new Landmark[_2D](l.id, newPoint)
     }
 
@@ -89,7 +94,7 @@ object Fitting {
     modelLmViews.foreach(lmView => lmView.color = java.awt.Color.RED)
 */
     println("Data loaded. Starting fitting")
-    val (samples, posteriorEvaluator) = fitImage(model, modelLm, targetLm, modelView)
+    val (samples, posteriorEvaluator) = fitImage(model, modelLm, targetLmFront, targetLmSide, modelView)
 
     val bestSample = samples.maxBy(posteriorEvaluator.logValue)
     val bestFit = model.instance(bestSample.parameters.modelCoefficients).transform(bestSample.poseTransformation)
@@ -100,7 +105,7 @@ object Fitting {
 
     val waistAntID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.anterior").head.point).id
     val waistPostID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.posterior").head.point).id
-    val bestFitWC = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID))
+    val bestFitWC = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1000 // Convert to mm
 
     val bodyFat = Measurement.getBodyFatPercentage(bestFit, bestFitHeight, 64, 24, Measurement.sexEnum.MALE)
 
@@ -108,6 +113,83 @@ object Fitting {
     println(bestFitWC)
     println(bodyFat)
 
+  }
+
+  def fitImage(model: StatisticalMeshModel, modelLm: Seq[Landmark[_3D]], targetLmFront: Seq[Landmark[_2D]], targetLmSide: Seq[Landmark[_2D]],
+               modelView: ShowInScene.ShowInSceneStatisticalMeshModel.View): (IndexedSeq[Fitting.Sample], ProductEvaluator[Fitting.Sample]) = {
+
+    // Fit front image first
+    val (samplesFront, posteriorEval) = fitImage(model, modelLm, targetLmFront, modelView)
+    val bestSample = samplesFront.maxBy(posteriorEval.logValue)
+    val bestFit = model.instance(bestSample.parameters.modelCoefficients).transform(bestSample.poseTransformation)
+
+    val bestFitHeight = Measurement.measurePointHeight(bestFit)
+
+    val waistAntID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.anterior").head.point).id
+    val waistPostID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.posterior").head.point).id
+    val bestFitWC = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1000 // Convert to mm
+
+    val bodyFat = Measurement.getBodyFatPercentage(bestFit, bestFitHeight, 64, 24, Measurement.sexEnum.MALE)
+
+    println(bestFitHeight)
+    println(bestFitWC)
+    println(bodyFat)
+
+    // Fit side image next using the bestFit as the initial sample
+    val modelLmIDs =  modelLm.map{l => bestFit.pointSet.findClosestPoint(l.point).id}.toIndexedSeq
+    val targetPoints = targetLmSide.map{l => l.point}.toIndexedSeq
+
+    // Add some noise to target landmarks.
+    // Model as normal distribution
+    val landmarkNoiseVariance = 9.0
+    val uncertainty = MultivariateNormalDistribution(
+      DenseVector.zeros[Double](2),
+      DenseMatrix.eye[Double](2) * landmarkNoiseVariance
+    )
+
+    val correspondences = modelLmIDs.zip(targetPoints).map{modelIdWithTargetPoint =>
+      val (modelId, targetPoint) =  modelIdWithTargetPoint
+      (modelId, targetPoint, uncertainty)
+    }
+
+    val likelihoodEvaluator = CachedEvaluator(CorrespondenceEvaluator(model, correspondences, orientationEnum.SIDE))
+    val priorEvaluator = CachedEvaluator(PriorEvaluator(model))
+
+    val posteriorEvaluator = ProductEvaluator(priorEvaluator, likelihoodEvaluator)
+
+    // Set proposal update mixture
+    val shapeUpdateProposal = ShapeUpdateProposal(model.rank, 0.1)
+    val rotationUpdateProposal = RotationUpdateProposal(0.01)
+    val translationUpdateProposal = TranslationUpdateProposal(1.0)
+    val generator = MixtureProposal.fromProposalsWithTransition(
+      (0.7, shapeUpdateProposal),
+      (0.3, rotationUpdateProposal),
+      (0.0, translationUpdateProposal)
+    )
+
+    // Set initialisation values
+    val initialParameters = Parameters(Vector(0, 0, 0), (0.0, 0.0, 0.0), DenseVector.zeros[Double](model.rank))
+    val initialSample = Sample("initial", initialParameters, computeCenterOfMass(bestFit))
+
+    // Set up chain and obtain iterator
+    val chain = MetropolisHastings(generator, posteriorEvaluator)
+    val logger = new Logger()
+    val mhIterator = chain.iterator(initialSample, logger)
+
+    val samplingIterator = for((sample, iteration) <- mhIterator.zipWithIndex) yield {
+      // Visualisation code
+      //println("iteration " + iteration)
+      if ((modelView != null) && (iteration % 500 == 0)) {
+        modelView.shapeModelTransformationView.shapeTransformationView.coefficients = sample.parameters.modelCoefficients
+        modelView.shapeModelTransformationView.poseTransformationView.transformation = sample.poseTransformation
+      }
+
+      sample
+    }
+
+    val samples = samplingIterator.slice(1000, 11000).toIndexedSeq
+    println(logger.acceptanceRatios())
+    (samples, posteriorEvaluator)
   }
 
   def fitImage(model: StatisticalMeshModel, modelLm: Seq[Landmark[_3D]], targetLm: Seq[Landmark[_2D]],
@@ -129,7 +211,7 @@ object Fitting {
       (modelId, targetPoint, uncertainty)
     }
 
-    val likelihoodEvaluator = CachedEvaluator(CorrespondenceEvaluator(model, correspondences))
+    val likelihoodEvaluator = CachedEvaluator(CorrespondenceEvaluator(model, correspondences, orientationEnum.FRONT))
     val priorEvaluator = CachedEvaluator(PriorEvaluator(model))
 
     val posteriorEvaluator = ProductEvaluator(priorEvaluator, likelihoodEvaluator)
@@ -155,7 +237,7 @@ object Fitting {
 
     val samplingIterator = for((sample, iteration) <- mhIterator.zipWithIndex) yield {
       // Visualisation code
-      println("iteration " + iteration)
+      //println("iteration " + iteration)
       if ((modelView != null) && (iteration % 500 == 0)) {
         modelView.shapeModelTransformationView.shapeTransformationView.coefficients = sample.parameters.modelCoefficients
         modelView.shapeModelTransformationView.poseTransformationView.transformation = sample.poseTransformation
@@ -261,7 +343,7 @@ object Fitting {
   }
 
   // 3D mesh vs 2D image
-  private case class CorrespondenceEvaluator(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_2D], MultivariateNormalDistribution)])
+  private case class CorrespondenceEvaluator(model: StatisticalMeshModel, correspondences: Seq[(PointId, Point[_2D], MultivariateNormalDistribution)], orientation: orientationEnum)
     extends DistributionEvaluator[Sample] {
 
     val (marginalizedModel, newCorrespondences) = marginalizeModelForCorrespondences(model, correspondences)
@@ -273,7 +355,17 @@ object Fitting {
       val likelihoods = newCorrespondences.map{correspondence =>
         val (id, targetPoint, uncertainty) = correspondence
         val modelInstancePoint = currModelInstance.pointSet.point(id)
-        val truncInstance: Vector[_2D] = Vector(modelInstancePoint.y, modelInstancePoint.z)
+        var truncInstance: Vector[_2D] = Vector(0.0, 0.0)
+
+        // If front, compare y and z
+        // Else, compare y and x
+        if (orientation == orientationEnum.FRONT){
+          truncInstance = Vector(modelInstancePoint.y, modelInstancePoint.z)
+        }
+        else {
+          truncInstance = Vector(modelInstancePoint.y, modelInstancePoint.x)
+        }
+
         val observedDeformation = targetPoint - truncInstance
 
         uncertainty.logpdf(observedDeformation.toBreezeVector)
@@ -403,6 +495,14 @@ object Fitting {
       val residual = to.parameters.translationParameters - from.parameters.translationParameters
       perturbationDistr.logpdf(residual.toBreezeVector)
     }
+  }
+
+  object orientationEnum extends Enumeration {
+    type orientationEnum = Value
+    val FRONT, SIDE, UNKNOWN = Value
+
+    def withNameWithDefault(s: String): Value =
+      orientationEnum.values.find(_.toString.toLowerCase == s.toLowerCase()).getOrElse(UNKNOWN)
   }
 
 }
