@@ -27,9 +27,8 @@ object Measurement {
           //TODO
 
         case "e" => // Start experiments
-          //waistCircumferenceTest()
+          waistCircumferenceTest()
           heightTest()
-          //volumeTest()
 
         case "h" => // Help
           println("Learn how to use a computer you scrub\n")
@@ -79,10 +78,6 @@ object Measurement {
     */
 
     // If exists, start alignment
-    // Initialise Scalismo
-    scalismo.initialize()
-
-    println("Scalismo initialised")
 
     // Check if refLandmarks.json exists - Landmark file
     if (!Files.exists(Paths.get("data/inkreate-ref/inkreateRefLandmarks.json"))) {
@@ -180,10 +175,6 @@ object Measurement {
   }
 
   private def waistCircumferenceTest(): Unit = {
-
-    scalismo.initialize()
-
-    println("Scalismo initialised")
 
     // First load files
     // Extract meshs (.stl) and landmarks (.json)
@@ -304,39 +295,6 @@ object Measurement {
 
   }
 
-  private def volumeTest(): Unit = {
-
-    scalismo.initialize()
-
-    val files = new File("data/distance-test/").listFiles
-    val sqFiles = files.filter(f => f.getName.contains("sq")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
-    val sqTrueVolume = sqFiles.map{f => math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
-    val sqDataset = sqFiles.map{f => MeshIO.readMesh(f).get}
-    var  sqVol = new ListBuffer[Double]
-
-    for (i <- sqDataset.indices){
-      val mesh = sqDataset(i)
-      sqVol += getMeshVolume(mesh)
-    }
-
-    val spFiles = new File("data/volume-test/").listFiles.filter(f => f.getName.contains("sp")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
-    val spTrueVolume =  spFiles.filter(f => f.getName.contains(".stl")).map{f => (4.0/3.0) * math.Pi * math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
-    val spDataset = spFiles.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
-    var spVol = new ListBuffer[Double]
-
-    for (i <- spDataset.indices){
-      val mesh = spDataset(i)
-      spVol += getMeshVolume(mesh)
-    }
-
-    val trueShape1Vol = 96540.29
-    val shape1 = new File("data/volume-test/").listFiles.filter(f => f.getName.contains("Shape1")).filter(f => f.getName.contains(".stl")).sortBy(_.getName).map{f => MeshIO.readMesh(f).get}.head
-    val shape1Vol = getMeshVolume(shape1)
-
-    println("Done")
-
-  }
-
   def getMeshVolume(mesh: TriangleMesh[_3D]): Double = {
     // Convert TriangleMesh[_3D] to vtkPolyData
     val vtkMesh = scalismo.utils.MeshConversion.meshToVtkPolyData(mesh)
@@ -351,6 +309,7 @@ object Measurement {
   def getBodyFatPercentage(mesh: TriangleMesh[_3D], height: Double, mass: Double, age: Int, sex: sexEnum): Double = {
     // Get volume in litres. Scale up from mm3 to l
     val bodyVolumeRaw = getMeshVolume(mesh) * 1e+3
+    println(bodyVolumeRaw)
     var frc = 0.0
     var vt = 0.0
 
@@ -366,8 +325,12 @@ object Measurement {
 
     // Determine thoracic gas volume (TGV)
     val tgv = frc + 0.5 * vt
-
-    val bodyVolumeCorrected = bodyVolumeRaw + 0.4 * tgv
+/*
+    val meshArea = mesh.area * 1e+4
+    val k = -4.67 * 10e-5
+    val SAA = k * meshArea
+*/
+    val bodyVolumeCorrected = bodyVolumeRaw + tgv
     val bodyDensity = mass/bodyVolumeCorrected
 
     // Determine body fat percentage using Siri or Brožek based on BMI
@@ -384,7 +347,7 @@ object Measurement {
       bodyFat = 100 * ((4.57/bodyDensity) - 4.142)
     }
 
-    bodyFat
+    math.abs(bodyFat)
   }
 
   def getWaistCircumference(mesh: TriangleMesh[_3D], waistAnt: Point[_3D], waistPost: Point[_3D]): Double = {
@@ -392,7 +355,7 @@ object Measurement {
   }
 
   object sexEnum extends Enumeration {
-    type sexEnum= Value
+    type sexEnum = Value
     val FEMALE, MALE, UNKNOWN = Value
 
     def withNameWithDefault(s: String): Value =
