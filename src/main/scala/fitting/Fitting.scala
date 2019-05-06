@@ -2,6 +2,7 @@ package fitting
 
 import java.io.File
 
+import scala.io.Source
 import breeze.linalg.{DenseMatrix, DenseVector}
 import scalismo.common.PointId
 import scalismo.faces.io.{PixelImageIO, TLMSLandmarksIO}
@@ -18,13 +19,14 @@ import scalismo.ui.api.{ScalismoUI, ShowInScene}
 import scalismo.utils.Memoize
 import measurement.Measurement
 import fitting.Fitting.orientationEnum.orientationEnum
+import scalismo.faces.landmarks.TLMSLandmark2D
 
 object Fitting {
 
   implicit private val rng: scalismo.utils.Random = scalismo.utils.Random(42)
 
   def start(): Unit = {
-    val fittingConfig = List("Start image fitting (f)", "Experiments (e)", "Help (h)", "Quit (q)\n")
+    val fittingConfig = List("Start image fitting (f)", "Experiments (e)", "Help (h)", "Return (r)\n")
 
     var input = ""
 
@@ -41,16 +43,8 @@ object Fitting {
         case "h" => // Help
           println("Learn how to use a computer you scrub\n")
 
-        case "q" => // Quit
-          input = scala.io.StdIn.readLine("Are you sure you want to quit (y/n)?\n").toLowerCase()
-          input match {
-
-            case "y" => // Yes
-              sys.exit(0)
-
-            case _ => // Any
-              println("That ain't it chief\n")
-          }
+        case "r" => // Return
+          return
 
         case _ => // Any
           println("That ain't it chief\n")
@@ -72,46 +66,64 @@ object Fitting {
     //modelLmViews.foreach(lmView => lmView.color = java.awt.Color.BLUE)
 
     //val targetGroup = ui.createGroup("target")
-    val realHeight = 2
+    val realHeight: IndexedSeq[Double] = Source.fromFile("data/image-landmarks/height.txt").getLines().toIndexedSeq.map{h => h.toDouble}
 
-    val imgLmFront = TLMSLandmarksIO.read2D(new File("data/image-landmarks/000-front.tlms")).get.map{TLMSLandmark => TLMSLandmark.toLandmark}
-    val lmHeightFront = imgLmFront.filter{p => p.id == "metatarsal-phalangeal.i.rt"}.head.point.y - imgLmFront.filter{p => p.id == "crown"}.head.point.y
-    val scaleFactorFront = lmHeightFront/realHeight
-    val targetLmFront: IndexedSeq[Landmark[_2D]] = imgLmFront.map{l =>
-      val newPoint = Vector(l.point.x / scaleFactorFront, l.point.y / scaleFactorFront).toPoint
-      new Landmark[_2D](l.id, newPoint)
-    }
+    val tlmsLandmarks = new File("data/image-landmarks/").listFiles.filter{f => f.getName.contains("tlms")}
+    val imgLmFront: IndexedSeq[IndexedSeq[TLMSLandmark2D]] = tlmsLandmarks.filter{f => f.getName.contains("Front")}.sortBy{f => f.getName}.map{f => TLMSLandmarksIO.read2D(f).get}.toIndexedSeq
+    val targetLmFront: IndexedSeq[IndexedSeq[Landmark[_2D]]] = imgLmFront.map{l: IndexedSeq[TLMSLandmark2D] =>
+      val lmHeightFront = l.filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - l.filter{p => p.id == "crown"}.head.point.y
+      val height = realHeight(imgLmFront.indexOf(l))
+      val scaleFactor = lmHeightFront/height
+      val targetFront: IndexedSeq[Landmark[_2D]] = l.map{l =>
+        val newPoint = Vector(l.point.x / scaleFactor, l.point.y / scaleFactor).toPoint
+        new Landmark[_2D](l.id, newPoint)
+      }
+      targetFront
+    }.toIndexedSeq
 
-    val imgLmSide = TLMSLandmarksIO.read2D(new File("data/image-landmarks/000-side.tlms")).get.map{TLMSLandmark => TLMSLandmark.toLandmark}
-    val lmHeightSide = imgLmSide.filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - imgLmSide.filter{p => p.id == "crown"}.head.point.y
-    val scaleFactorSide = lmHeightSide/realHeight
-    val targetLmSide: IndexedSeq[Landmark[_2D]] = imgLmFront.map{l =>
-      val newPoint = Vector(l.point.x / scaleFactorSide, l.point.y / scaleFactorSide).toPoint
-      new Landmark[_2D](l.id, newPoint)
-    }
+    val imgLmSide: IndexedSeq[IndexedSeq[TLMSLandmark2D]] = tlmsLandmarks.filter{f => f.getName.contains("Side")}.sortBy{f => f.getName}.map{f => TLMSLandmarksIO.read2D(f).get}.toIndexedSeq
+    val targetLmSide: IndexedSeq[IndexedSeq[Landmark[_2D]]] = imgLmSide.map{l: IndexedSeq[TLMSLandmark2D] =>
+      val lmHeightSide = l.filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - l.filter{p => p.id == "crown"}.head.point.y
+      val height = realHeight(imgLmSide.indexOf(l))
+      val scaleFactor = lmHeightSide/height
+      val targetFront: IndexedSeq[Landmark[_2D]] = l.map{l =>
+        val newPoint = Vector(l.point.x / scaleFactor, l.point.y / scaleFactor).toPoint
+        new Landmark[_2D](l.id, newPoint)
+      }
+      targetFront
+    }.toIndexedSeq
 
     /*val targetLmViews = ui.show(targetGroup, targetLm, "targetLandmarks")
     modelLmViews.foreach(lmView => lmView.color = java.awt.Color.RED)
 */
     println("Data loaded. Starting fitting")
-    val (samples, posteriorEvaluator) = fitImage(model, modelLm, targetLmFront, targetLmSide, modelView)
+    val bestFits = targetLmFront.map{l =>
+      val (samples, posteriorEvaluator) = fitImage(model, modelLm, l, targetLmSide(targetLmFront.indexOf(l)), null)
+      val bestSample = samples.maxBy(posteriorEvaluator.logValue)
+      val bestFit = model.instance(bestSample.parameters.modelCoefficients).transform(bestSample.poseTransformation)
+      bestFit
+    }.toIndexedSeq
+
+    /*val (samples, posteriorEvaluator) = fitImage(model, modelLm, targetLmFront, targetLmSide, modelView)
 
     val bestSample = samples.maxBy(posteriorEvaluator.logValue)
     val bestFit = model.instance(bestSample.parameters.modelCoefficients).transform(bestSample.poseTransformation)
     val resultGroup = ui.createGroup("result")
-    ui.show(resultGroup, bestFit, "best fit")
-
-    val bestFitHeight = Measurement.measurePointHeight(bestFit)
+    ui.show(resultGroup, bestFit, "best fit")*/
 
     val waistAntID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.anterior").head.point).id
     val waistPostID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.posterior").head.point).id
-    val bestFitWC = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1000 // Convert to mm
 
-    val bodyFat = Measurement.getBodyFatPercentage(bestFit, bestFitHeight, 64, 24, Measurement.sexEnum.MALE)
+    val bestFitHeight = bestFits.map{bestFit => Measurement.measurePointHeight(bestFit)}
+    val bestFitWC = bestFits.map{bestFit => Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1000}
+    val bodyVol = bestFits.map{bestFit => Measurement.getMeshVolume(bestFit) * 1e+3}
 
+    println("Height")
     println(bestFitHeight)
+    println("WC")
     println(bestFitWC)
-    println(bodyFat)
+    println("Vol")
+    println(bodyVol)
 
   }
 
@@ -360,10 +372,10 @@ object Fitting {
         // If front, compare y and z
         // Else, compare y and x
         if (orientation == orientationEnum.FRONT){
-          truncInstance = Vector(modelInstancePoint.y, modelInstancePoint.z)
+          truncInstance = Vector(modelInstancePoint.z, modelInstancePoint.y)
         }
         else {
-          truncInstance = Vector(modelInstancePoint.y, modelInstancePoint.x)
+          truncInstance = Vector(modelInstancePoint.x, modelInstancePoint.y)
         }
 
         val observedDeformation = targetPoint - truncInstance
