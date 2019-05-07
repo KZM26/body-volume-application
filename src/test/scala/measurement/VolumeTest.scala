@@ -10,14 +10,12 @@ import scala.collection.mutable.ListBuffer
 import scala.io.Source
 
 class VolumeTest extends BVATestSuite {
-
   it("Cube volume measurements exactly equal") {
 
     val files = new File("data/distance-test/").listFiles
     val sqFiles = files.filter(f => f.getName.contains("sq")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
     val sqTrueVolume = sqFiles.map{f => math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
     val sqDataset = sqFiles.map{f => MeshIO.readMesh(f).get}
-    var  sqVol = new ListBuffer[Double]
 
     for (i <- sqDataset.indices){
       val mesh = sqDataset(i)
@@ -40,7 +38,6 @@ class VolumeTest extends BVATestSuite {
   it ("Arbitrary shape volume within 95%"){
 
     val arFiles = new File("data/volume-test/").listFiles.filter(f => f.getName.contains("shape")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
-    val arDataset = arFiles.map{f => MeshIO.readMesh(f).get}
     val volFile = Source.fromFile("data/volume-test/volume.txt")
     // Read line by line using iterator. Drop first two lines
     val iter = volFile.getLines().toIndexedSeq
@@ -52,6 +49,27 @@ class VolumeTest extends BVATestSuite {
       val shapeVolume = info.substring(info.indexOf("-") + 1, info.length).toDouble
       val mesh = MeshIO.readMesh(arFiles.filter(p => p.getName.containsSlice(shapeName)).head).get
       assert(math.abs(getMeshVolume(mesh)/shapeVolume - 1) < 0.05)
+    }
+  }
+
+  it ("Body volume within 95%"){
+
+    val bodyFiles = new File("data/inkreate/").listFiles.sortBy(f => f.getName)
+    val bodyDataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
+
+    // Read out the same number of values from csv as there are body files
+    // Read file
+    val csvSRC = Source.fromFile("data/inkreate-ref/measurements.csv")
+    // Read line by line using iterator. Drop first two lines
+    val lines = csvSRC.getLines().drop(2).map(_.split(",")).toIndexedSeq
+    val csvVolume = lines.map{row =>
+      // Extract each volume (in column 111 = CY)
+      // Multiple to convert to mm3 to match getMeshVolume output unit
+      row(102).toDouble * 1e+6
+    }
+
+    bodyDataset.map{mesh =>
+      assert(math.abs(getMeshVolume(mesh)/csvVolume(bodyDataset.indexOf(mesh)) - 1) < 0.05)
     }
   }
 }
