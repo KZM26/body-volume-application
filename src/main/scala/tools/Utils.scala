@@ -100,4 +100,15 @@ object Utils {
     outputFile.close()
   }
 
+  def getDifferences(reference: IndexedSeq[Double], test: IndexedSeq[Double]): (Double, Double) = {
+    val difference = reference.indices.map{i =>
+      reference(i) - test(i)
+    }
+
+    val meanDifference = difference.sum/(difference.size * 1.0)
+    val absDifference = difference.map{diff => math.abs(diff)}.sum/(difference.size * 1.0)
+
+    (meanDifference, absDifference)
+  }
+
 }
