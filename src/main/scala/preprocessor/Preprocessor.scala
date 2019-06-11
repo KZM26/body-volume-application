@@ -1,21 +1,21 @@
 package preprocessor
 
 import java.io.File
-import java.io.PrintWriter
 import java.nio.file.{Files, Paths}
 
-import javafx.scene.shape.TriangleMesh
 import scalismo.common.PointId
 import scalismo.io.MeshIO
 import scalismo.ui.api.ScalismoUI
 import scalismo.io._
 import scalismo.geometry._
-import scalismo.mesh.TriangleMesh3D
+import scalismo.mesh.TriangleMesh
 import scalismo.registration._
-import scalismo.statisticalmodel.dataset.{DataCollection, DataItem}
+
 import scala.collection.mutable.ListBuffer
 
 object Preprocessor {
+
+  private val refLandmarkPath: String =  "data/ref-landmarks/refLandmarks.json"
 
   def start(): Unit = {
 
@@ -28,10 +28,10 @@ object Preprocessor {
       input match {
 
         case "l" => // Start landmarking
-          this.landmarkRef()
+          landmarkRef()
 
         case "a" => // Start Alignment
-          this.align()
+          align()
 
         case "h" => // Help
           println("Learn how to use a computer you scrub\n")
@@ -55,9 +55,6 @@ object Preprocessor {
 
   private def landmarkRef(): Unit = {
 
-    // Initialise Scalismo
-    scalismo.initialize()
-
     println("Scalismo Viewer will now open\nSelect the landmarks and save them as refLandmarks.json in the data directory")
 
     // create a visualisation window
@@ -79,16 +76,12 @@ object Preprocessor {
   private def align(): Unit = {
 
     // Check if refLandmarks.json exists - Landmark file
-    if (!Files.exists(Paths.get("data/ref_landmarks/refLandmarks.json"))) {
+    if (!Files.exists(Paths.get(refLandmarkPath))) {
       println("Landmark file - refLandmarks.json not found. Returning to previous menu")
       return
     }
 
     // If exists, start alignment
-    // Initialise Scalismo
-    scalismo.initialize()
-
-    println("Scalismo initialised")
 
     // First load files
     val files = new File("data/training/").listFiles
@@ -97,7 +90,7 @@ object Preprocessor {
     println("Data loaded")
 
     // The reference landmarks are based on shape 0 in the training set
-    val refLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/ref_landmarks/refLandmarks.json")).get
+    val refLandmarks = LandmarkIO.readLandmarksJson[_3D](new File(refLandmarkPath)).get
     val reference = dataset.head
 
     // Extract the point IDs from the reference shape using the landmark coordinates
@@ -113,25 +106,19 @@ object Preprocessor {
       pointIDs += pid.get.id
     }
 
-    // Write to file
-    /**
-    val writer = new PrintWriter(new File("data/ref_landmarks/refLandmarksPoints.txt"))
-    writer.write(pointIDs.mkString("\n"))
-    writer.close()
-**/
     // Get the shapes to align to the reference
-    val toAlign = dataset.tail
 
     println("Reference landmarks extracted")
 
     println("Starting alignment")
 
+    val centreOfMass = computeCentreOfMass(reference)
+
     val refLandmarksProper = pointIDs.map{id => Landmark("L_"+id, reference.pointSet.point(PointId(id))) }
     // Find a rigid transform for each in the to align set and apply it
     val alignedSet = dataset.map{ mesh =>
       val landmarks = pointIDs.map{id => Landmark[_3D]("L_"+id, mesh.pointSet.point(PointId(id)))}
-      // TODO: Figure out what the centre should actually be
-      val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(landmarks, refLandmarksProper, Point3D(0, 0, -10))
+      val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(landmarks, refLandmarksProper, centreOfMass)
       mesh.transform(rigidTrans)
     }
 
@@ -143,5 +130,10 @@ object Preprocessor {
     // Array.tabulate(alignedSet.length){i => MeshIO.writeMesh(alignedSet(i), new File("data/training_aligned/tr_gt0" + i.toString + "0.stl"))}
     println("Writing complete")
 
+  }
+
+  def computeCentreOfMass(mesh: TriangleMesh[_3D]): Point[_3D] = {
+    val normFactor = 1.0 / mesh.pointSet.numberOfPoints
+    mesh.pointSet.points.foldLeft(Point(0, 0, 0))((sum, point) => sum + point.toVector * normFactor)
   }
 }
