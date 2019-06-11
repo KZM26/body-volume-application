@@ -1,6 +1,6 @@
 package measurement
 
-import java.io.File
+import java.io.{File, PrintWriter}
 import java.nio.file.{Files, Paths}
 
 import scalismo.geometry.{Landmark, Point, _3D}
@@ -27,7 +27,7 @@ object Measurement {
           //TODO
 
         case "e" => // Start experiments
-          waistCircumferenceTest()
+          pathFindingTest()
           heightTest()
 
         case "h" => // Help
@@ -64,61 +64,18 @@ object Measurement {
 
   private def heightTest() : Unit ={
 
-    // Measure height of all and WC of all
-
-    /*
-    // Check if refLandmarks.json exists - Landmark file
-    if (!Files.exists(Paths.get("data/ref_landmarks/inkreateRefLandmarks.json"))) {
-      println("Landmark file - inkreateRefLandmarks.json not found. Returning to previous menu")
-      return
-    }
-
-    // The reference landmarks are based on shape 0 in the training set
-    val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/ref_landmarks/inkreateRefLandmarks.json")).get
-    */
-
-    // If exists, start alignment
-
-    // Check if refLandmarks.json exists - Landmark file
-    if (!Files.exists(Paths.get("data/inkreate-ref/inkreateRefLandmarks.json"))) {
-      println("Landmark file - inkreateRefLandmarks.json not found. Returning to previous menu")
-      return
-    }
-
-    // The reference landmarks are based on shape 0 in the training set
-    val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate-ref/inkreateRefLandmarks.json")).get
-
     // First load files
     val bodyFiles = new File("data/inkreate/").listFiles
     val dataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
-    val reference = dataset.head
 
     // Read file
     val csvSRC = Source.fromFile("data/inkreate-ref/measurements.csv")
     // Read line by line using iterator. Drop first two lines
     val iter = csvSRC.getLines().drop(2).map(_.split(","))
+
     // Collection for heights
-    var csvHeight = new ListBuffer[Int]()
-    // Extract each height (in column 2)
-    for (i <- bodyFiles.indices){
-      csvHeight += iter.next()(2).toInt
-    }
-
-
-
-    println("Data loaded")
-
-    // Extract the point IDs from the reference shape using the landmark coordinates
-    // Reference landmark iterator
-    // List buffer for points
-    val it = inkreateRefLandmarks.seq.iterator
-    var pointIDs = new ListBuffer[Int]()
-
-    // Iterate, get point, extract pid from the reference shape
-    while (it.hasNext){
-      val pt = reference.pointSet.findClosestPoint(it.next().point).point
-      val pid = reference.pointSet.pointId(pt)
-      pointIDs += pid.get.id
+    val csvHeight = iter.toIndexedSeq.map{l =>
+      l(2).toInt
     }
 
     val pointHeight : IndexedSeq[Double] = dataset.map{mesh =>
@@ -127,54 +84,26 @@ object Measurement {
 
     println("Done")
 
+    val (md, mad) = Utils.getDifferences(csvHeight.map{f => f.toDouble}, pointHeight)
+    val writer = new PrintWriter(new File("data/heightTestDifferences.txt"))
+    writer.write(md.toString + "\n")
+    writer.write(mad.toString)
+    writer.close()
+
     val csvFields = ListBuffer("Ground Truth", "Point Height")
 
     // Extract all data
     var allData = new ListBuffer[Seq[Any]]
     allData += csvHeight.toList
-    allData += pointHeight.map{h => math.round(h)}.toList
+    allData += pointHeight.map{h => BigDecimal(h).setScale(5, BigDecimal.RoundingMode.HALF_UP).toDouble}.toList
     val directory = "data/heightTest.csv"
     Utils.csvWrite(csvFields, allData.toList, directory)
 
     println("Results written to file")
 
-/*
-    val meshNumber = 12
-    val mesh = dataset(meshNumber)
-    val landmarks = pointIDs.map{id => Landmark[_3D]("L_"+id, mesh.pointSet.point(PointId(id)))}
-
-    // Use landmarks or iterate through all or assume floor and ceiling and look for closest points to a point way higher/lower than them
-    val ptCrown = landmarks.toList.head.point
-    val ptLtCalcaneousPost = landmarks.toList(1).point
-    val landmarkHeightZ = Math.abs(ptCrown.z - ptLtCalcaneousPost.z)
-    val landmarkHeightX = Math.abs(ptCrown.x - ptLtCalcaneousPost.x)
-    val landmarkHeightY = Math.abs(ptCrown.y - ptLtCalcaneousPost.y)
-
-    val it2 = mesh.pointSet.points
-    var pt = it2.next()
-    var maxY = pt.y
-    var minY = pt.y
-
-    while (it2.hasNext){
-
-      pt = it2.next()
-      if (maxY < pt.y) maxY = pt.y
-      if (minY > pt.y) minY = pt.y
-
-    }
-
-    val pointHeight = Math.abs(maxY - minY)
-
-    println("Landmark X Dist: " + landmarkHeightX.toString + " mm")
-    println("Landmark Z Dist: " + landmarkHeightZ.toString + " mm")
-    println("Landmark Y Height: " + landmarkHeightY.toString + " mm")
-    println("Point Y Height: " + pointHeight.toString + " mm")
-*/
-    // WC. A* algorithm
-
   }
 
-  private def waistCircumferenceTest(): Unit = {
+  private def pathFindingTest(): Unit = {
 
     // First load files
     // Extract meshs (.stl) and landmarks (.json)
@@ -203,12 +132,12 @@ object Measurement {
     }
 
     // The reference landmarks are based on shape 0 in the training set
-    val inkreateRefLandmarks = LandmarkIO.readLandmarksJson[_3D](new File("data/inkreate-ref/inkreateRefLandmarks.json")).get
+    val inkreateRefFiles = new File("data/inkreate-ref/").listFiles.filter(f => f.getName.contains("json")).sortBy(_.getName)
+    val inkreateRefLandmarks = inkreateRefFiles.map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
 
     // First load files
     val bodyFiles = new File("data/inkreate/").listFiles.sortBy(f => f.getName)
-    val bodyDataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
-    val reference = bodyDataset.head
+    val bodyDataset = inkreateRefLandmarks.indices.map{i => MeshIO.readMesh(bodyFiles(i)).get}
 
     // Read out the same number of values from csv as there are body files
     // Read file
@@ -218,7 +147,7 @@ object Measurement {
     // Collection for heights
     var csvWaistGirth = new ListBuffer[Double]()
     // Extract each height (in column 51 = AZ)
-    for (i <- bodyFiles.indices){
+    for (i <- bodyDataset.indices){
       csvWaistGirth += iter.next()(51).toDouble
     }
 
@@ -226,22 +155,29 @@ object Measurement {
 
     // Get point ID of the relevant landmarks using the reference mesh
     // Assume filter has one result. Get it
-    val waistAntID = reference.pointSet.findClosestPoint(inkreateRefLandmarks.filter(p => p.id == "WaistAnt").head.point).id
-    val waistPostID = reference.pointSet.findClosestPoint(inkreateRefLandmarks.filter(p => p.id == "WaistPost").head.point).id
-    val waistRtID = reference.pointSet.findClosestPoint(inkreateRefLandmarks.filter(p => p.id == "WaistRt").head.point).id
 
-    val aStarGirth: IndexedSeq[Double] = bodyDataset.map{ mesh =>
+
+    val aStarGirth: IndexedSeq[Double] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
+      val mesh = bodyDataset(i)
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
+      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistRt").head.point).id
+
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
-      val waistRt = mesh.pointSet.point(waistRtID)
+      //val waistRt = mesh.pointSet.point(waistRtID)
 
       val girth: Double = AStar.calculateDistance(mesh, waistAnt, waistPost)
       girth * 2
     }
 
-    val aStarXZGirth: IndexedSeq[Double] = bodyDataset.map{ mesh =>
+    val aStarXZGirth: IndexedSeq[Double] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
+      val mesh = bodyDataset(i)
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
+
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
 
@@ -249,8 +185,13 @@ object Measurement {
       girth * 2
     }
 
-    val aStarPlaneGirth: IndexedSeq[Double] = bodyDataset.map{ mesh =>
+    val aStarPlaneGirth: IndexedSeq[Double] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
+      val mesh = bodyDataset(i)
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
+      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistRt").head.point).id
+
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
       val waistRt = mesh.pointSet.point(waistRtID)
@@ -262,8 +203,13 @@ object Measurement {
     // Get and IndexedSeq of IndexedSeq[Double]. Produces girth calculations for all
     //val methods = List("Anonymous", "Cantrell", "HolderHigh", "HolderLow", "Hudson", "Integral", "Numerical", "Ramanujan1", "Ramanujan2")
     val methods = List("Ramanujan2")
-    val  ellipseGirth: IndexedSeq[IndexedSeq[Double]] = bodyDataset.map{ mesh: TriangleMesh[_3D] =>
+    val  ellipseGirth: IndexedSeq[IndexedSeq[Double]] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
+      val mesh = bodyDataset(i)
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
+      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistRt").head.point).id
+
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
       val waistRt = mesh.pointSet.point(waistRtID)
@@ -309,7 +255,6 @@ object Measurement {
   def getBodyFatPercentage(mesh: TriangleMesh[_3D], height: Double, mass: Double, age: Int, sex: sexEnum): Double = {
     // Get volume in litres. Scale up from mm3 to l
     val bodyVolumeRaw = getMeshVolume(mesh) * 1e+3
-    println(bodyVolumeRaw)
     var frc = 0.0
     var vt = 0.0
 
