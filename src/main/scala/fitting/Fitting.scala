@@ -146,7 +146,7 @@ object Fitting {
   }
 
   def fittingTestLandmark(): Unit = {
-    val ui = ScalismoUI()
+    //val ui = ScalismoUI()
 
     val model = StatismoIO.readStatismoMeshModel(new File("data/fbm.h5")).get
     val scalarValuedKernel = GaussianKernel[_3D](70) * 100.0
@@ -222,14 +222,14 @@ object Fitting {
     val bestFitsPosterior = targetLmFront.indices.map{i =>
       val posterior = landmarkPosterior(augModel, modelLm, targetLmFront(i), targetLmSide(i))
       posterior.mean
-    }
+    }/*
     val resultGroup = ui.createGroup("Results")
     bestFitsPosterior.indices.map{i=>
       ui.show(resultGroup, bestFitsPosterior(i), i.toString)
-    }
+    }*/
 
-    val waistAntID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.anterior").head.point).id
-    val waistPostID = model.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.posterior").head.point).id
+    val waistAntID = augModel.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.anterior").head.point).id
+    val waistPostID = augModel.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.posterior").head.point).id
 
     val bestFitHeightPosterior = bestFitsPosterior.map{bestFit => Measurement.measurePointHeight(bestFit)}
     val bestFitWCPosterior = bestFitsPosterior.map{bestFit => Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1000}
@@ -262,10 +262,8 @@ object Fitting {
     )
 
     val targetLmFront3D = targetLmFront.map{l => new Landmark[_3D](l.id, Point3D(l.point.x, l.point.y, 0.0))}
-    val targetPointFront3D = targetLmFront3D.map{l => l.point}
 
     val targetLmSide3D = targetLmSide.map{l => new Landmark[_3D](l.id, Point3D(0.0, l.point.y, l.point.x))}
-    val targetPointSide3D = targetLmSide3D.map{l => l.point}
 
     val modelLmFront = modelLm.filter{l =>
       val filtered = targetLmFront.filter(_.id == l.id)
@@ -277,58 +275,33 @@ object Fitting {
       filtered.nonEmpty
     }
 
-    val iterations = 1
-
     val littleNoiseFront = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * 0.5)
-    littleNoiseFront.cov.data(8) = 100000.0
-
-    var littleNoise = littleNoiseFront
-    val rigidTransFront = LandmarkRegistration.rigid3DLandmarkRegistration(targetLmFront3D, modelLmFront, computeCentreOfMass(model.referenceMesh))
-    var icpTarget = targetLmFront3D.map{t => t.transform(rigidTransFront).point}
-    var icpModel = model
-
-    def nonrigidICP(movingPosterior: StatisticalMeshModel, ptIds : Seq[PointId], numberOfIterations : Int): StatisticalMeshModel = {
-      if (numberOfIterations == 0) movingPosterior
-      else {
-        //val referencePoints = ptIds.map{id => movingPosterior.mean.pointSet.point(id)}
-        //val referencePoints = icpTarget.map{target => movingPosterior.mean.pointSet.findClosestPoint(target)}
-        val regressionData = for ((refPointId, targetPoint) <- ptIds zip icpTarget) yield {
-          val target = movingPosterior.mean.pointSet.findClosestPoint(targetPoint).point
-          (refPointId, targetPoint, littleNoise)
-        }
-        val posterior = icpModel.posterior(regressionData.toIndexedSeq)
-
-        nonrigidICP(posterior, ptIds, numberOfIterations - 1)
-      }
-    }
-
-    /*
-    val regressionDataFront = for ((refPoint, frontPoint) <- referencePointsFront zip targetPointFront3D) yield {
-      val refPointId = model.referenceMesh.pointSet.findClosestPoint(refPoint).id
-      (refPointId, frontPoint, littleNoiseFront)
-    }*/
+    littleNoiseFront.cov.data(8) = 100000000000000.0
 
     val referenceMesh = model.referenceMesh
     val referencePIDFront = modelLmFront.map{pt => referenceMesh.pointSet.findClosestPoint(pt.point).id}
-    val posteriorFront = nonrigidICP(icpModel, referencePIDFront, iterations)//model.posterior(regressionDataFront.toIndexedSeq)
+
+    val rigidTransFront = LandmarkRegistration.rigid3DLandmarkRegistration(targetLmFront3D, modelLmFront, computeCentreOfMass(model.referenceMesh))
+    val targetFrontTransformed = targetLmFront3D.map{t => t.transform(rigidTransFront).point}
+    val regressionDataFront = for ((refPointId, targetPoint) <- referencePIDFront zip targetFrontTransformed) yield {
+      (refPointId, targetPoint, littleNoiseFront)
+    }
+
+    val posteriorFront = model.posterior(regressionDataFront.toIndexedSeq)
 
     val littleNoiseSide = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * 0.5)
-    littleNoiseSide.cov.data(0) = 100000.0
+    littleNoiseSide.cov.data(0) = 100000000000000.0
 
-    littleNoise = littleNoiseSide
-    //icpModel = posteriorFront
     val posteriorLmSide = modelLmSide.map{lm => new Landmark[_3D](lm.id, posteriorFront.referenceMesh.pointSet.point(model.referenceMesh.pointSet.findClosestPoint(lm.point).id))}
     val referencePIDSide = posteriorLmSide.map{pt => posteriorFront.referenceMesh.pointSet.findClosestPoint(pt.point).id}
-    val rigidTransSide = LandmarkRegistration.rigid3DLandmarkRegistration(targetLmSide3D, posteriorLmSide, computeCentreOfMass(posteriorFront.referenceMesh))
-    icpModel = posteriorFront
-    icpTarget = targetLmSide3D.map{t => t.transform(rigidTransSide).point}
-    /*
-    val regressionDataSide = for ((refPoint, sidePoint) <- referencePointsSide zip targetPointSide3D) yield {
-      val refPointId = model.referenceMesh.pointSet.findClosestPoint(refPoint).id
-      (refPointId, sidePoint, littleNoiseSide)
-    }*/
 
-    val posteriorSide = nonrigidICP(icpModel, referencePIDSide, iterations)
+    val rigidTransSide = LandmarkRegistration.rigid3DLandmarkRegistration(targetLmSide3D, posteriorLmSide, computeCentreOfMass(posteriorFront.referenceMesh))
+    val targetSideTransformed = targetLmSide3D.map{t => t.transform(rigidTransSide).point}
+    val regressionDataSide = for ((refPointId, targetPoint) <- referencePIDSide zip targetSideTransformed) yield {
+      (refPointId, targetPoint, littleNoiseSide)
+    }
+
+    val posteriorSide = posteriorFront.posterior(regressionDataSide.toIndexedSeq)
 
     posteriorSide
   }
