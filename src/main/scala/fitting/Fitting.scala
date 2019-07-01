@@ -6,7 +6,8 @@ import javax.imageio.ImageIO
 
 import scala.io.Source
 import breeze.linalg.{DenseMatrix, DenseVector}
-
+import measurement.Measurement
+import fitting.Fitting.orientationEnum.orientationEnum
 import scalismo.common._
 import scalismo.faces.io.TLMSLandmarksIO
 import scalismo.geometry._
@@ -15,13 +16,13 @@ import scalismo.mesh.TriangleMesh
 import scalismo.registration.LandmarkRegistration
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, MultivariateNormalDistribution, StatisticalMeshModel}
 import scalismo.ui.api.ScalismoUI
-import measurement.Measurement
-import fitting.Fitting.orientationEnum.orientationEnum
 import scalismo.faces.landmarks.TLMSLandmark2D
 import scalismo.faces.parameters.ViewParameter
 import scalismo.geometry.Dim.ThreeDSpace
 import scalismo.kernels.{DiagonalKernel, GaussianKernel, MatrixValuedPDKernel, PDKernel}
 import scalismo.numerics.RandomMeshSampler3D
+import tools.Utils.sexEnum
+import tools.Utils.sexEnum.sexEnum
 
 object Fitting {
 
@@ -40,10 +41,13 @@ object Fitting {
           //TODO
 
         case "e" => // Start experiments
-          val l = IndexedSeq(1.5)
+          val l = IndexedSeq(0.25)
+          val s = IndexedSeq(0.50)
           for (i <- l) {
-            fittingTestLandmark(i)
-            println(i.toString)
+            for (j <- s) {
+              fittingTestLandmark(i, j)
+              println("L = " + i.toString + " Sig = " + j.toString)
+            }
           }
           //fittingTest()
 
@@ -74,6 +78,7 @@ object Fitting {
 
     //val targetGroup = ui.createGroup("target")
     val realHeight: IndexedSeq[Double] = Source.fromFile("data/image-landmarks/height.txt").getLines().toIndexedSeq.map{h => h.toDouble}
+    val sex: IndexedSeq[String] = Source.fromFile("data/image-landmarks/sex.txt").getLines().toIndexedSeq
     val tlmsLandmarks = new File("data/image-landmarks/").listFiles.filter{f => f.getName.contains("tlms")}
     val imageFiles = new File("data/image-landmarks/").listFiles.filter{f => f.getName.contains("png")}
 
@@ -105,17 +110,21 @@ object Fitting {
       }
       targetFront
     }
+    // Load data into container object
+    val targets = targetLmFront.indices.map{i =>
+      fittingData(targetLmFront(i), targetLmSide(i), sexEnum.withNameWithDefault(sex(i)))
+    }
 
     /*val targetLmViews = ui.show(targetGroup, targetLm, "targetLandmarks")
     modelLmViews.foreach(lmView => lmView.color = java.awt.Color.RED)
 */
     println("Data loaded. Starting fitting")
-    val bestFits = targetLmFront.map{l =>
-      val (samples, posteriorEvaluator) = Sampling.fitImage(model, modelLm, l, targetLmSide(targetLmFront.indexOf(l)), null)
+    val bestFits = targetLmFront.indices.map{i =>
+      val (samples, posteriorEvaluator) = Sampling.fitImage(model, modelLm, targetLmFront(i), targetLmSide(i), null)
       val bestSample = samples.maxBy(posteriorEvaluator.logValue)
       val bestFit = model.instance(bestSample.parameters.modelCoefficients).transform(bestSample.poseTransformation)
       bestFit
-    }.toIndexedSeq
+    }
 
     /*val (samples, posteriorEvaluator) = fitImage(model, modelLm, targetLmFront, targetLmSide, modelView)
 
@@ -144,42 +153,22 @@ object Fitting {
 
   }
 
-  def fittingTestLandmark(l: Double): Unit = {
-    val model = StatismoIO.readStatismoMeshModel(new File("data/fbm.h5")).get
-    val scalarValuedKernel = GaussianKernel[_3D](0.5) * l
+  def fittingTestLandmark(l: Double, s: Double): Unit = {
 
-    case class XmirroredKernel(kernel : PDKernel[_3D]) extends PDKernel[_3D] {
-      override def domain = RealSpace[_3D]
-      override def k(x: Point[_3D], y: Point[_3D]) = kernel(Point(x(0) * -1f ,x(1), x(2)), y)
-    }
+    val maleModel = StatismoIO.readStatismoMeshModel(new File("data/maleFBM.h5")).get
+    val femaleModel = StatismoIO.readStatismoMeshModel(new File("data/femaleFBM.h5")).get
 
-    def symmetrizeKernel(kernel : PDKernel[_3D]) : MatrixValuedPDKernel[_3D] = {
-      val xmirrored = XmirroredKernel(kernel)
-      val k1 = DiagonalKernel(kernel, 3)
-      val k2 = DiagonalKernel(xmirrored * -1f, xmirrored, xmirrored)
-      k1 + k2
-    }
+    val augMaleModel = augmentFittingModel(maleModel, l, s)
+    val augFemaleModel = augmentFittingModel(femaleModel, l, s)
 
-    val gp = GaussianProcess[_3D, Vector[_3D]](symmetrizeKernel(scalarValuedKernel))
-    val sampler = RandomMeshSampler3D(
-      model.referenceMesh,
-      numberOfPoints = 800,
-      seed = 0,
-    )
-    val lowRankGP = LowRankGaussianProcess.approximateGP(
-      gp,
-      sampler,
-      numBasisFunctions = 200,
-    )(ThreeDSpace, vectorizer = gp.vectorizer, rand = rng)
+    val maleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/male.json")).get
+    val femaleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/female.json")).get
 
-    val augModel = StatisticalMeshModel.augmentModel(model, lowRankGP)
+    val maleModelContainer = modelContainer(augMaleModel, maleModelLm)
+    val femaleModelContainer = modelContainer(augFemaleModel, femaleModelLm)
 
-    val modelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/spring-minimal.json")).get
-    //val modelLmViews = ui.show(modelGroup, modelLm, "modelLandmarks")
-    //modelLmViews.foreach(lmView => lmView.color = java.awt.Color.BLUE)
-
-    //val targetGroup = ui.createGroup("target")
     val realHeight: IndexedSeq[Double] = Source.fromFile("data/image-landmarks/height.txt").getLines().toIndexedSeq.map{h => h.toDouble}
+    val sex: IndexedSeq[String] = Source.fromFile("data/image-landmarks/sex.txt").getLines().toIndexedSeq
     val tlmsLandmarks = new File("data/image-landmarks/").listFiles.filter{f => f.getName.contains("tlms")}.sortBy{f => f.getName}
     val imageFiles = new File("data/image-landmarks/").listFiles.filter{f => f.getName.contains("png")}.sortBy{f => f.getName}
 
@@ -212,35 +201,43 @@ object Fitting {
       targetFront.sortBy(l => l.id)
     }
 
-    val targetLmFrontFiltered = targetLmFront.map{lmseq =>
-      lmseq.filter{p => !p.id.contains("acromion")}.sortBy(f => f.id)
+    // Load data into container object
+    val targets = targetLmFront.indices.map{i =>
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i), sexEnum.withNameWithDefault(sex(i)))
+      var fittingModelContainer: fittingModelContainer = null
+      if (fitData.sex == sexEnum.MALE){
+        fittingModelContainer = new fittingModelContainer(fitData, maleModelContainer)
+      }
+      else {
+        fittingModelContainer = new fittingModelContainer(fitData, femaleModelContainer)
+      }
 
+      fittingModelContainer
     }
-    val targetLmSideFiltered = targetLmSide.map{lmseq =>
-      lmseq.filter{p => !p.id.contains("metatarsal")}.sortBy(f => f.id)
-    }
-    /*val targetLmViews = ui.show(targetGroup, targetLm, "targetLandmarks")
-    modelLmViews.foreach(lmView => lmView.color = java.awt.Color.RED)
-*/
+
     println("Data loaded. Starting fitting")
 
-    val bestFitsPosterior = targetLmFront.indices.map{i =>
-      val posterior = landmarkPosterior(augModel, modelLm, targetLmFrontFiltered(i), targetLmSide(i))
-      posterior.mean
+    val results: IndexedSeq[(TriangleMesh[_3D], Double, Double, Double)] = targets.map{target =>
+      val posterior = landmarkPosterior(target)
+      val waistAntID = target.modelCon.model.referenceMesh.pointSet.findClosestPoint(target.modelCon.modelLM.filter(p => p.id == "waist.anterior").head.point).id
+      val waistPostID = target.modelCon.model.referenceMesh.pointSet.findClosestPoint(target.modelCon.modelLM.filter(p => p.id == "waist.posterior").head.point).id
+      val bestFit = posterior.mean
+      val heightPosterior = Measurement.measurePointHeight(bestFit)
+      val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+      val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+      val result: (TriangleMesh[_3D], Double, Double, Double) = (posterior.mean, heightPosterior, wcPosterior, volPosterior)
+      result
     }
     val ui = ScalismoUI()
     val resultGroup = ui.createGroup("Results")
-    bestFitsPosterior.indices.map{i=>
-      ui.show(resultGroup, bestFitsPosterior(i), i.toString)
+    results.indices.map{i=>
+      ui.show(resultGroup, results(i)._1, i.toString)
     }
 
-    val waistAntID = augModel.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.anterior").head.point).id
-    val waistPostID = augModel.referenceMesh.pointSet.findClosestPoint(modelLm.filter(p => p.id == "waist.posterior").head.point).id
-
-    val bestFitHeightPosterior = bestFitsPosterior.map{bestFit => Measurement.measurePointHeight(bestFit)}
-    val bestFitWCPosterior = bestFitsPosterior.map{bestFit => Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1000}
-    val bodyVolPosterior = bestFitsPosterior.map{bestFit => Measurement.getMeshVolume(bestFit) * 1e+3}
-
+    val bestFitHeightPosterior = results.map{result => result._2}
+    val bestFitWCPosterior = results.map{result => result._3}
+    val bodyVolPosterior = results.map{result => result._4}
     println("Height Posterior")
     println(bestFitHeightPosterior)
     println("WC Posterior")
@@ -249,23 +246,12 @@ object Fitting {
     println(bodyVolPosterior)
   }
 
-  def landmarkPosterior(model: StatisticalMeshModel, modelLm: Seq[Landmark[_3D]], targetLmFront: Seq[Landmark[_2D]], targetLmSide: Seq[Landmark[_2D]]): StatisticalMeshModel = {
+  def landmarkPosterior(fittingModel: fittingModelContainer): StatisticalMeshModel = {
 
-    val cameraInfo = imageParameters.huaweiP8.camera.copy(orthographic = true, focalLength = 3.8, sensorSize = Vector(8.3, 8.3))
-    //val imageInfo = imageSize(1585, 970)
-    val imageInfo = imageSize(970, 70)
-    val viewInfoAP = ViewParameter(Vector(0f, 0f, 1000f), 0f, 0f, 0f)
-    val imageConverterAP: imageParameters = imageParameters.huaweiP8.copy(
-      camera = cameraInfo,
-      imageSize = imageInfo,
-      view = viewInfoAP
-    )
-    val viewInfoLat = ViewParameter(Vector(1000f, 0f, 0f), 0f, 0f, 0f)
-    val imageConverterLat: imageParameters = imageParameters.huaweiP8.copy(
-      camera = cameraInfo,
-      imageSize = imageInfo,
-      view = viewInfoLat
-    )
+    val model = fittingModel.modelCon.model
+    val modelLm = fittingModel.modelCon.modelLM
+    val targetLmFront = fittingModel.fitData.lmFront
+    val targetLmSide = fittingModel.fitData.lmSide
 
     val targetLmFront3D = targetLmFront.map{l => new Landmark[_3D](l.id, Point3D(l.point.x, l.point.y, 0.0))}
 
@@ -282,7 +268,7 @@ object Fitting {
     }.sortBy(l => l.id)
 
     val littleNoiseFront = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * 0.5)
-    littleNoiseFront.cov.data(8) = 100000000000000.0
+    littleNoiseFront.cov.data(8) = Double.MaxValue
 
     val referenceMesh = model.referenceMesh
     val referencePIDFront = modelLmFront.map{pt => referenceMesh.pointSet.findClosestPoint(pt.point).id}
@@ -296,7 +282,7 @@ object Fitting {
     val posteriorFront = model.posterior(regressionDataFront.toIndexedSeq)
 
     val littleNoiseSide = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * 0.5)
-    littleNoiseSide.cov.data(0) = 100000000000000.0
+    littleNoiseSide.cov.data(0) = Double.MaxValue
 
     val posteriorLmSide = modelLmSide.map{lm => new Landmark[_3D](lm.id, posteriorFront.referenceMesh.pointSet.point(model.referenceMesh.pointSet.findClosestPoint(lm.point).id))}
     val referencePIDSide = posteriorLmSide.map{pt => posteriorFront.referenceMesh.pointSet.findClosestPoint(pt.point).id}
@@ -422,12 +408,59 @@ object Fitting {
     mesh.pointSet.points.foldLeft(Point(0, 0, 0))((sum, point) => sum + point.toVector * normFactor)
   }
 
+  def augmentFittingModel (model: StatisticalMeshModel, l: Double, s: Double): StatisticalMeshModel = {
+    val scalarValuedKernel = GaussianKernel[_3D](s) * l
+
+    case class XmirroredKernel(kernel : PDKernel[_3D]) extends PDKernel[_3D] {
+      override def domain = RealSpace[_3D]
+      override def k(x: Point[_3D], y: Point[_3D]) = kernel(Point(x(0) * -1f ,x(1), x(2)), y)
+    }
+
+    def symmetrizeKernel(kernel : PDKernel[_3D]) : MatrixValuedPDKernel[_3D] = {
+      val xmirrored = XmirroredKernel(kernel)
+      val k1 = DiagonalKernel(kernel, 3)
+      val k2 = DiagonalKernel(xmirrored * -1f, xmirrored, xmirrored)
+      k1 + k2
+    }
+
+    val gp = GaussianProcess[_3D, Vector[_3D]](symmetrizeKernel(scalarValuedKernel))
+
+    val sampler = RandomMeshSampler3D(
+      model.referenceMesh,
+      numberOfPoints = 800,
+      seed = 0,
+    )
+    val lowRankGP = LowRankGaussianProcess.approximateGP(
+      gp,
+      sampler,
+      numBasisFunctions = 200,
+    )(ThreeDSpace, vectorizer = gp.vectorizer, rand = rng)
+
+    StatisticalMeshModel.augmentModel(model, lowRankGP)
+  }
+
   object orientationEnum extends Enumeration {
     type orientationEnum = Value
     val FRONT, SIDE, UNKNOWN = Value
 
     def withNameWithDefault(s: String): Value =
       orientationEnum.values.find(_.toString.toLowerCase == s.toLowerCase()).getOrElse(UNKNOWN)
+  }
+
+  private case class fittingData(lmFront: IndexedSeq[Landmark[_2D]], lmSide: IndexedSeq[Landmark[_2D]], sex: sexEnum){
+    def getLmFront: IndexedSeq[Landmark[_2D]] = lmFront
+    def getLmSide: IndexedSeq[Landmark[_2D]] = lmSide
+    def getSex: sexEnum = sex
+  }
+
+  private case class modelContainer(model: StatisticalMeshModel, modelLM: Seq[Landmark[_3D]]){
+    def getModel: StatisticalMeshModel = model
+    def getLM: Seq[Landmark[_3D]] = modelLM
+  }
+
+  private case class fittingModelContainer(fitData: fittingData, modelCon: modelContainer){
+    def getData: fittingData = fitData
+    def getModel: modelContainer = modelCon
   }
 
 }
