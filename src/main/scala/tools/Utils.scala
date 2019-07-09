@@ -11,7 +11,7 @@ object Utils {
 
   def gpVaryingRank(gpModel: StatisticalMeshModel, components: Int): Seq[StatisticalMeshModel] = {
 
-    val gpModels = for(i<-1 to components) yield {
+    val gpModels = for(i <- 1 to components) yield {
       gpModel.truncate(i)
     }
     gpModels
@@ -110,5 +110,14 @@ object Utils {
 
     (meanDifference, absDifference)
   }
+
+  object sexEnum extends Enumeration {
+    type sexEnum = Value
+    val FEMALE, MALE, UNKNOWN = Value
+
+    def withNameWithDefault(s: String): Value =
+      sexEnum.values.find(_.toString.toLowerCase == s.toLowerCase()).getOrElse(UNKNOWN)
+  }
+
 
 }
