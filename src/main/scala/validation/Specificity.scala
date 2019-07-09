@@ -15,31 +15,44 @@ object Specificity {
   
   implicit private val rng: scalismo.utils.Random = scalismo.utils.Random(42)
 
-  def specificity(datasetPath: String, distance: String, nb: Int, outputPath: String, landmarkPath: String) {
+  def specificity(datasetPath: String, distance: String, nb: Int, outputPath: String) {
     scalismo.initialize()
 
-    // Build GPMM from DataCollection
-    val training = new File(datasetPath.concat("training/")).listFiles
-    val testing = new File(datasetPath.concat("testing/")).listFiles
+    println("Starting Male Specificity")
 
-    val datasetTraining = training.map{f => MeshIO.readMesh(f).get}.toIndexedSeq
-
-    val dc : DataCollection = DataCollection.fromMeshSequence(datasetTraining.head, datasetTraining.tail)._1.get
-
-    val gpModel : StatisticalMeshModel = Build.buildGP(dc)
-
+    val maleTraining = new File("data/spring-training/male-training/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val maleTesting = new File("data/spring-training/male-testing/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val maleDC = DataCollection.fromMeshSequence(maleTraining.head, maleTraining.tail)._1.get
+    val gpModelMale : StatisticalMeshModel = Build.buildGP(maleDC)
     // Varying GP rank
-    val limited : Seq[StatisticalMeshModel] = Utils.gpVaryingRank(gpModel, datasetTraining.size)
+    val maleLimited : Seq[StatisticalMeshModel] = Utils.gpVaryingRank(gpModelMale, maleTraining.length)
 
     // Specificity
-    val datasetTesting = testing.map{f => MeshIO.readMesh(f).get}
-    val spec : Seq[Seq[Double]] = for(gp <- limited) yield {
+    val maleSpec : Seq[Seq[Double]] = for(gp <- maleLimited) yield {
       // Average distance
-      distancesEval(gp, datasetTesting, nb, distance)
+      distancesEval(gp, maleTesting, nb, distance)
     }
 
-    // Write to file
-    Utils.writeToFile(spec, outputPath)
+    val outputPathMale = "data/specificityMale.csv"
+    Utils.writeToFile(maleSpec, outputPathMale)
+
+    println("Starting Female Specificity")
+
+    val femaleTraining = new File("data/spring-training/female-training/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val femaleTesting = new File("data/spring-training/female-testing/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val femaleDC = DataCollection.fromMeshSequence(femaleTraining.head, femaleTraining.tail)._1.get
+    val gpModelFemale : StatisticalMeshModel = Build.buildGP(femaleDC)
+    // Varying GP rank
+    val femaleLimited : Seq[StatisticalMeshModel] = Utils.gpVaryingRank(gpModelFemale, femaleTesting.length)
+
+    // Specificity
+    val femaleSpec : Seq[Seq[Double]] = for(gp <- femaleLimited) yield {
+      // Average distance
+      distancesEval(gp, femaleTesting, nb, distance)
+    }
+
+    val outputPathFemale = "data/specificityFemale.csv"
+    Utils.writeToFile(femaleSpec, outputPathFemale)
 
   }
 

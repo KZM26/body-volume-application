@@ -14,22 +14,29 @@ object Generalisation {
 
   implicit private val rng: scalismo.utils.Random = scalismo.utils.Random(42)
 
-  def generalisation(datasetPath: String, distance: String, outputPath: String, landmarkPath: String): Unit = {
+  def generalisation(datasetPath: String, distance: String, outputPath: String): Unit = {
     scalismo.initialize()
 
-    // Build GPMM from aligned data
-    val training = new File(datasetPath.concat("training/")).listFiles
-    val testing = new File(datasetPath.concat("testing/")).listFiles
-
-    val dataset = (training ++ testing).sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
-
-    val dc = DataCollection.fromMeshSequence(dataset.head, dataset.tail)._1.get
+    val maleTraining = new File("data/spring-training/male-training/").listFiles
+    val maleTesting = new File("data/spring-training/male-testing/").listFiles
+    val maleCombined = (maleTraining ++ maleTesting).sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val maleDC = DataCollection.fromMeshSequence(maleCombined.head, maleCombined.tail)._1.get
 
     // Calculate Generalisation
-    val folds : Seq[Seq[Double]] = createCrossValidation(dc, distance)
+    val maleFolds : Seq[Seq[Double]] = createCrossValidation(maleDC, distance)
+    val outputPathMale = "data/generalisationMale.csv"
+    writeToFile(maleFolds, outputPathMale)
 
-    // Write to file
-    writeToFile(folds, outputPath)
+    val femaleTraining = new File("data/spring-training/female-training/").listFiles
+    val femaleTesting = new File("data/spring-training/female-testing/").listFiles
+    val femaleCombined = (femaleTraining ++ femaleTesting).sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val femaleDC = DataCollection.fromMeshSequence(femaleCombined.head, femaleCombined.tail)._1.get
+
+    // Calculate Generalisation
+    val femaleFolds : Seq[Seq[Double]] = createCrossValidation(femaleDC, distance)
+    val outputPathFemale = "data/generalisationFemale.csv"
+    writeToFile(femaleFolds, outputPathFemale)
+
   }
 
   // Withdraws one instance of the dataset, creates a training set with the others,
