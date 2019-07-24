@@ -15,7 +15,7 @@ import scala.io.Source
 object Measurement {
 
   def start(): Unit = {
-    val measurementConfig = List("Start measurements (s)", "Experiments (e)", "Help (h)", "Quit (q)\n")
+    val measurementConfig = List("Experiments (e)", "Help (h)", "Return (r)\n")
 
     var input = ""
 
@@ -23,26 +23,16 @@ object Measurement {
       input = scala.io.StdIn.readLine(measurementConfig.mkString("\n")).toLowerCase()
       input match {
 
-        case "s" => // Start measurements
-          //TODO
-
         case "e" => // Start experiments
           pathFindingTest()
           heightTest()
+          volumeTest()
 
         case "h" => // Help
           println("Learn how to use a computer you scrub\n")
 
-        case "q" => // Quit
-          input = scala.io.StdIn.readLine("Are you sure you want to quit (y/n)?\n").toLowerCase()
-          input match {
-
-            case "y" => // Yes
-              sys.exit(0)
-
-            case _ => // Any
-              println("That ain't it chief\n")
-          }
+        case "r" => // Return
+          return
 
         case _ => // Any
           println("That ain't it chief\n")
@@ -85,7 +75,7 @@ object Measurement {
     println("Done")
 
     val (md, mad) = Utils.getDifferences(csvHeight.map{f => f.toDouble}, pointHeight)
-    val writer = new PrintWriter(new File("data/heightTestDifferences.txt"))
+    val writer = new PrintWriter(new File("data/measurement-test-result/heightTestDifferences.txt"))
     writer.write(md.toString + "\n")
     writer.write(mad.toString)
     writer.close()
@@ -96,7 +86,7 @@ object Measurement {
     var allData = new ListBuffer[Seq[Any]]
     allData += csvHeight.toList
     allData += pointHeight.map{h => BigDecimal(h).setScale(5, BigDecimal.RoundingMode.HALF_UP).toDouble}.toList
-    val directory = "data/heightTest.csv"
+    val directory = "data/measurement-test-result/heightTest.csv"
     Utils.csvWrite(csvFields, allData.toList, directory)
 
     println("Results written to file")
@@ -105,6 +95,7 @@ object Measurement {
 
   private def pathFindingTest(): Unit = {
 
+    // Square Distance
     // First load files
     // Extract meshs (.stl) and landmarks (.json)
     val sqFiles = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sq")).sortBy(_.getName)
@@ -112,32 +103,29 @@ object Measurement {
     val sqDataset = sqFiles.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
     val sqLandmarks = sqFiles.filter(f => f.getName.contains(".json")).map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
     var distance = new ListBuffer[Double]
-    var sqResult = new ListBuffer[Boolean]
 
-    for (i <- sqDataset.indices){
+    sqDataset.indices.map{i =>
       val mesh = sqDataset(i)
       val start = sqLandmarks(i).toIndexedSeq(0).point
       val end = sqLandmarks(i).toIndexedSeq(1).point
       distance += AStar.calculateDistance(mesh, start, end)
-      sqResult += distance(i) == trueDistance(i)
     }
 
-    println("Square length test")
-    println(sqResult.mkString("\n"))
+    val sqFields = ListBuffer("Ground Truth", "True Distance")
+    val sqDirectory = "data/measurement-test-result/squareDistanceTest.csv"
+    var sqData = new ListBuffer[Seq[Any]]
+    sqData += trueDistance.toList
+    sqData += distance.toList
+    Utils.csvWrite(sqFields , sqData.toList, sqDirectory)
 
-    // Check if refLandmarks.json exists - Landmark file
-    if (!Files.exists(Paths.get("data/inkreate-ref/inkreateRefLandmarks.json"))) {
-      println("Landmark file - inkreateRefLandmarks.json not found. Returning to previous menu")
-      return
-    }
-
+    // Waist Circumference Test
     // The reference landmarks are based on shape 0 in the training set
     val inkreateRefFiles = new File("data/inkreate-ref/").listFiles.filter(f => f.getName.contains("json")).sortBy(_.getName)
     val inkreateRefLandmarks = inkreateRefFiles.map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
 
     // First load files
-    val bodyFiles = new File("data/inkreate/").listFiles.sortBy(f => f.getName)
-    val bodyDataset = inkreateRefLandmarks.indices.map{i => MeshIO.readMesh(bodyFiles(i)).get}
+    val bodyFiles = new File("data/inkreate/").listFiles.sortBy(_.getName)
+    val bodyDataset = inkreateRefLandmarks.indices.map{f => MeshIO.readMesh(bodyFiles(f)).get}
 
     // Read out the same number of values from csv as there are body files
     // Read file
@@ -156,17 +144,14 @@ object Measurement {
     // Get point ID of the relevant landmarks using the reference mesh
     // Assume filter has one result. Get it
 
-
     val aStarGirth: IndexedSeq[Double] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
       val mesh = bodyDataset(i)
-      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
-      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
-      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistRt").head.point).id
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.ant").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.post").head.point).id
 
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
-      //val waistRt = mesh.pointSet.point(waistRtID)
 
       val girth: Double = AStar.calculateDistance(mesh, waistAnt, waistPost)
       girth * 2
@@ -175,8 +160,8 @@ object Measurement {
     val aStarXZGirth: IndexedSeq[Double] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
       val mesh = bodyDataset(i)
-      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
-      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.ant").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.post").head.point).id
 
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
@@ -188,9 +173,9 @@ object Measurement {
     val aStarPlaneGirth: IndexedSeq[Double] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
       val mesh = bodyDataset(i)
-      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
-      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
-      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistRt").head.point).id
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.ant").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.post").head.point).id
+      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.rt").head.point).id
 
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
@@ -201,20 +186,19 @@ object Measurement {
     }
 
     // Get and IndexedSeq of IndexedSeq[Double]. Produces girth calculations for all
-    //val methods = List("Anonymous", "Cantrell", "HolderHigh", "HolderLow", "Hudson", "Integral", "Numerical", "Ramanujan1", "Ramanujan2")
-    val methods = List("Ramanujan2")
+    val methods = List("Anonymous", "Cantrell", "HolderHigh", "HolderLow", "Hudson", "Integral", "Numerical", "Ramanujan1", "Ramanujan2")
+    //val methods = List("Ramanujan2")
     val  ellipseGirth: IndexedSeq[IndexedSeq[Double]] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
       val mesh = bodyDataset(i)
-      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistAnt").head.point).id
-      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistPost").head.point).id
-      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "WaistRt").head.point).id
+      val waistAntID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.ant").head.point).id
+      val waistPostID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.post").head.point).id
+      val waistRtID = mesh.pointSet.findClosestPoint(inkreateRefLandmarks(i).filter(p => p.id == "waist.rt").head.point).id
 
       val waistAnt = mesh.pointSet.point(waistAntID)
       val waistPost = mesh.pointSet.point(waistPostID)
       val waistRt = mesh.pointSet.point(waistRtID)
 
-      // List ellipse calculation methods
       // For each method calculate circumference
       val holder: IndexedSeq[Double] = methods.map{method: String =>
         EllipseMaster.calculateCircumference(mesh, waistAnt, waistPost, waistRt, ellipseCalculationMethod.withNameWithDefault(method))
@@ -234,10 +218,70 @@ object Measurement {
     allData += aStarPlaneGirth.toList
     allData += aStarXZGirth.toList
     allData ++= ellipseGirthTransposed
-    val directory = "data/waistCircumferenceTest.csv"
+    val directory = "data/measurement-test-result/waistCircumferenceTest.csv"
     Utils.csvWrite(csvFields, allData.toList, directory)
 
     println("Results written to file")
+
+  }
+
+  private def volumeTest(): Unit = {
+    val csvFields = ListBuffer("Ground Truth", "Measured Volume")
+
+    val files = new File("data/distance-test/").listFiles
+    val sqFiles = files.filter(f => f.getName.contains("sq")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
+    val sqTrueVolume = sqFiles.map{f => math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
+    val sqDataset = sqFiles.map{f => MeshIO.readMesh(f).get}
+    val sqResult = sqDataset.map{mesh => getMeshVolume(mesh)}
+    var sqData = new ListBuffer[Seq[Any]]
+    sqData += sqTrueVolume.toList
+    sqData += sqResult.toList
+    val sqDirectory = "data/measurement-test-result/squareVolume.csv"
+    Utils.csvWrite(csvFields, sqData.toList, sqDirectory)
+
+    val spFiles = new File("data/volume-test/").listFiles.filter(f => f.getName.contains("sp")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
+    val spTrueVolume =  spFiles.map{f => (4.0/3.0) * math.Pi * math.pow(f.getName.substring(0, f.getName.indexOf(".") - 2).toInt, 3)}
+    val spDataset = spFiles.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
+    val spResult = spDataset.map{mesh => getMeshVolume(mesh)}
+    var spData = new ListBuffer[Seq[Any]]
+    spData += spTrueVolume.toList
+    spData += spResult.toList
+    val spDirectory = "data/measurement-test-result/sphereVolume.csv"
+    Utils.csvWrite(csvFields, spData.toList, spDirectory)
+
+    val arFiles = new File("data/volume-test/").listFiles.filter(f => f.getName.contains("shape")).filter(f => f.getName.contains(".stl")).sortBy(_.getName)
+    val volFile = Source.fromFile("data/volume-test/volume.txt")
+    // Read line by line using iterator. Drop first two lines
+    val iter = volFile.getLines().toIndexedSeq
+    var arTrue = new ListBuffer[Double]
+    val arResult = iter.map{ info =>
+      val shapeName = info.substring(0, info.indexOf("-"))
+      arTrue += info.substring(info.indexOf("-") + 1, info.length).toDouble
+      val mesh = MeshIO.readMesh(arFiles.filter(p => p.getName.containsSlice(shapeName)).head).get
+      getMeshVolume(mesh)
+    }
+    var arData = new ListBuffer[Seq[Any]]
+    arData += arTrue.toList
+    arData += arResult.toList
+    val arDirectory = "data/measurement-test-result/arbitraryVolume.csv"
+    Utils.csvWrite(csvFields, arData.toList, arDirectory)
+
+    val bodyFiles = new File("data/inkreate/").listFiles.sortBy(f => f.getName)
+    val bodyDataset = bodyFiles.map{f => MeshIO.readMesh(f).get}
+    val csvSRC = Source.fromFile("data/inkreate-ref/measurements.csv")
+    // Read line by line using iterator. Drop first two lines
+    val lines = csvSRC.getLines().drop(2).map(_.split(",")).toIndexedSeq
+    val csvVolume = lines.map{row =>
+      // Extract each volume (in column 111 = CY)
+      // Multiple to convert to mm3 to match getMeshVolume output unit
+      row(102).toDouble * 1e+6
+    }
+    val bodyResult = bodyDataset.map{mesh => getMeshVolume(mesh)}
+    var bodyData = new ListBuffer[Seq[Any]]
+    bodyData += csvVolume.toList
+    bodyData += bodyResult.toList
+    val bodyDirectory = "data/measurement-test-result/bodyVolume.csv"
+    Utils.csvWrite(csvFields, bodyData.toList, bodyDirectory)
 
   }
 
