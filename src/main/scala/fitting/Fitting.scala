@@ -1,13 +1,12 @@
 package fitting
 
-import java.io.File
+import java.io.{File, PrintWriter}
 
 import javax.imageio.ImageIO
 
 import scala.io.Source
 import breeze.linalg.{DenseMatrix, DenseVector}
 import measurement.Measurement
-import fitting.Fitting.orientationEnum.orientationEnum
 import scalismo.common._
 import scalismo.faces.io.TLMSLandmarksIO
 import scalismo.geometry._
@@ -17,14 +16,15 @@ import scalismo.registration.LandmarkRegistration
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, MultivariateNormalDistribution, StatisticalMeshModel}
 import scalismo.ui.api.{Group, ScalismoUI}
 import scalismo.faces.landmarks.TLMSLandmark2D
-import scalismo.faces.parameters.ViewParameter
 import scalismo.geometry.Dim.ThreeDSpace
 import scalismo.kernels.{DiagonalKernel, GaussianKernel, MatrixValuedPDKernel, PDKernel}
 import scalismo.numerics.RandomMeshSampler3D
-
+import tools.Utils
 import tools.Utils.sexEnum
 import tools.Utils.sexEnum.sexEnum
 import validation.Hausdorff
+
+import scala.collection.mutable.ListBuffer
 
 object Fitting {
 
@@ -39,12 +39,13 @@ object Fitting {
       input = scala.io.StdIn.readLine(fittingConfig.mkString("\n")).toLowerCase()
       input match {
 
-        case "s" => // Start fitting
-          //TODO
+        case "f" => // Start fitting
+          fittingExperimentMale()
+          fittingExperimentFemale()
 
         case "e" => // Start experiments
-          val l = IndexedSeq(50.0)
-          val s = IndexedSeq(200.0)
+          val l = IndexedSeq(0.005)
+          val s = IndexedSeq(20.0)
           for (i <- l) {
             for (j <- s) {
               fittingTestLandmark(i, j)
@@ -65,35 +66,520 @@ object Fitting {
     }
   }
 
+  def fittingExperimentMale(){
 
+    val rootDirectory = "data/male-test/"
+    val meshLm = LandmarkIO.readLandmarksJson[_3D](new File("data/mpi-training/mpi.json")).get.sortBy{lm => lm.id}
+    val meshReference = MeshIO.readMesh(new File("data/mpi-training/reference.stl")).get
+    val meshWaistAntID = meshReference.pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.anterior").head.point).id
+    val meshWaistPostID = meshReference.pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.posterior").head.point).id
+
+    val maleModel = StatismoIO.readStatismoMeshModel(new File("data/maleFBM.h5")).get
+    val maleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/male.json")).get.filter(p => !p.id.contains("radial")).sortBy{lm => lm.id}
+
+    val augMaleModel = augmentFittingModel(maleModel, 50.0, 200.0)
+    val maleModelContainer = modelContainer(augMaleModel, maleModelLm)
+
+    val marginalAugMaleModel = marginalModelArmCut(augMaleModel)
+    val marginalMaleModelContainer = modelContainer(marginalAugMaleModel, maleModelLm)
+
+    val maleMeshes = new File("data/mpi-male/").listFiles.filter{f => f.getName.contains("stl")}.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val realHeight: IndexedSeq[Double] = maleMeshes.map{mesh => Measurement.measurePointHeight(mesh)}
+
+    val tlmsLandmarks = new File("data/image-male/").listFiles.filter{f => f.getName.contains("tlms")}.sortBy{f => f.getName}
+    val imageFiles = new File("data/image-male/").listFiles.filter{f => f.getName.contains("png")}.sortBy{f => f.getName}
+
+    val imgLmFront: IndexedSeq[IndexedSeq[TLMSLandmark2D]] = tlmsLandmarks.filter{f => f.getName.contains("Front")}.sortBy{f => f.getName}.map{f => TLMSLandmarksIO.read2D(f).get}.toIndexedSeq
+    val frontImages = imageFiles.filter{f => f.getName.contains("Front")}.sortBy{f => f.getName}.map{f => ImageIO.read(f)}
+    val targetLmFront: IndexedSeq[IndexedSeq[Landmark[_2D]]] = imgLmFront.indices.map{i =>
+      val lmHeightFront = imgLmFront(i).filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - imgLmFront(i).filter{p => p.id == "crown"}.head.point.y
+      val height = realHeight(i) * 1e3
+      val image = frontImages(i)
+      val scaleFactor = imageScalingFactor(height, image.getHeight, lmHeightFront)
+      val targetFront: IndexedSeq[Landmark[_2D]] = imgLmFront(i).map{l =>
+        val newPoint = Vector(l.point.x * scaleFactor, l.point.y * scaleFactor).toPoint
+        new Landmark[_2D](l.id, newPoint)
+      }
+      targetFront.sortBy(l => l.id)
+    }
+
+    val sideImages = imageFiles.filter{f => f.getName.contains("Side")}.sortBy{f => f.getName}.map{f => ImageIO.read(f)}
+    val imgLmSide: IndexedSeq[IndexedSeq[TLMSLandmark2D]] = tlmsLandmarks.filter{f => f.getName.contains("Side")}.sortBy{f => f.getName}.map{f => TLMSLandmarksIO.read2D(f).get}.toIndexedSeq
+    val targetLmSide: IndexedSeq[IndexedSeq[Landmark[_2D]]] = imgLmSide.indices.map{i =>
+      val lmHeightSide = imgLmSide(i).filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - imgLmSide(i).filter{p => p.id == "crown"}.head.point.y
+      val height = realHeight(i)
+      val image = sideImages(i)
+      val scaleFactor = imageScalingFactor(height, image.getHeight, lmHeightSide)
+      val targetFront: IndexedSeq[Landmark[_2D]] = imgLmSide(i).map{l =>
+        val newPoint = Vector(l.point.x * scaleFactor, l.point.y * scaleFactor).toPoint
+        new Landmark[_2D](l.id, newPoint)
+      }
+      targetFront.sortBy(l => l.id)
+    }
+
+    val targets = targetLmFront.indices.map{i =>
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.0045, 0.001)
+      fittingModelContainer(fitData, maleModelContainer)
+    }
+
+    val marginalTargets = targetLmFront.indices.map{i =>
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.0045, 0.001)
+      fittingModelContainer(fitData, marginalMaleModelContainer)
+    }
+
+    val bestFits: IndexedSeq[TriangleMesh[_3D]] = targets.map{target =>
+      val posterior = landmarkPosterior(target)
+      posterior.mean
+    }
+
+    val marginalBestFits: IndexedSeq[TriangleMesh[_3D]] = marginalTargets.map{target =>
+      val posterior = landmarkPosterior(target)
+      posterior.mean
+    }
+
+    val waistAntID = maleModel.referenceMesh.pointSet.findClosestPoint(maleModelLm.filter(p => p.id == "waist.anterior").head.point).id
+    val waistPostID = maleModel.referenceMesh.pointSet.findClosestPoint(maleModelLm.filter(p => p.id == "waist.posterior").head.point).id
+
+    {
+      val normalTestResults = bestFits.indices.map { i =>
+        val bestFit = bestFits(i)
+        val original = maleMeshes(i)
+
+        val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+        val resultLm = maleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(maleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+        val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+
+        val avgDistance = MeshMetrics.avgDistance(alignedOriginal, bestFit)
+        val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedOriginal, bestFit)
+
+        val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+        val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+        val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+        val realHeight = Measurement.measurePointHeight(original) * 1e+3
+        val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+        val realVol = Measurement.getMeshVolume(original) * 1e3
+
+        (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+      }
+
+      var allData = new ListBuffer[Seq[Any]]
+      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
+      val directory = rootDirectory + "NormalMaleImageTest.csv"
+
+      val rh = normalTestResults.map { result => result._1 }
+      val fh = normalTestResults.map { result => result._2 }
+      val rwc = normalTestResults.map { result => result._3 }
+      val fwc = normalTestResults.map { result => result._4 }
+      allData += rh
+      allData += fh
+      allData += rwc
+      allData += fwc
+      allData += normalTestResults.map { result => result._5 }
+      allData += normalTestResults.map { result => result._6 }
+      allData += normalTestResults.map { result => result._7 }
+      allData += normalTestResults.map { result => result._8 }
+
+      Utils.csvWrite(csvFields, allData.toList, directory)
+
+      val (hmd, hmad) = Utils.getDifferences(rh, fh)
+      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
+
+      val writer = new PrintWriter(new File(rootDirectory + "NormalMaleImageTestDifferences.txt"))
+      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
+      writer.write("Height MAD: " + hmad.toString + "\n")
+      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
+      writer.write("WC MAD: " + wcmad.toString)
+      writer.close()
+    }
+
+    {
+      val cutTestResults = bestFits.indices.map { i =>
+        val bestFit = bestFits(i)
+        val original = maleMeshes(i)
+
+        val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+        val resultLm = maleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(maleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+        val cutResult = modelMeshArmClip(bestFit)
+
+        val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+        val alignedCutOriginal = mpiFingerClip(alignedOriginal)
+
+        val avgDistance = MeshMetrics.avgDistance(alignedCutOriginal, cutResult)
+        val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedCutOriginal, cutResult)
+
+        val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+        val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+        val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+        val realHeight = Measurement.measurePointHeight(original) * 1e+3
+        val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+        val realVol = Measurement.getMeshVolume(original) * 1e3
+
+        (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+      }
+
+      var allData = new ListBuffer[Seq[Any]]
+      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
+      val directory = rootDirectory + "CutMaleImageTest.csv"
+
+      val rh = cutTestResults.map { result => result._1 }
+      val fh = cutTestResults.map { result => result._2 }
+      val rwc = cutTestResults.map { result => result._3 }
+      val fwc = cutTestResults.map { result => result._4 }
+      allData += rh
+      allData += fh
+      allData += rwc
+      allData += fwc
+      allData += cutTestResults.map { result => result._5 }
+      allData += cutTestResults.map { result => result._6 }
+      allData += cutTestResults.map { result => result._7 }
+      allData += cutTestResults.map { result => result._8 }
+
+      Utils.csvWrite(csvFields, allData.toList, directory)
+
+      val (hmd, hmad) = Utils.getDifferences(rh, fh)
+      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
+
+      val writer = new PrintWriter(new File(rootDirectory + "CutMaleImageTestDifferences.txt"))
+      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
+      writer.write("Height MAD: " + hmad.toString + "\n")
+      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
+      writer.write("WC MAD: " + wcmad.toString)
+      writer.close()
+    }
+
+    {
+      val marginalTestResults = marginalBestFits.indices.map { i =>
+        val bestFit = bestFits(i)
+        val original = maleMeshes(i)
+
+        val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+        val resultLm = maleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(maleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+        val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+        val alignedCutOriginal = mpiFingerClip(alignedOriginal)
+
+        val avgDistance = MeshMetrics.avgDistance(alignedCutOriginal, bestFit)
+        val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedCutOriginal, bestFit)
+
+        val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+        val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+        val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+        val realHeight = Measurement.measurePointHeight(original) * 1e+3
+        val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+        val realVol = Measurement.getMeshVolume(original) * 1e3
+
+        (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+      }
+
+      var allData = new ListBuffer[Seq[Any]]
+      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
+      val directory = rootDirectory + "MarginalMaleImageTest.csv"
+
+      val rh = marginalTestResults.map { result => result._1 }
+      val fh = marginalTestResults.map { result => result._2 }
+      val rwc = marginalTestResults.map { result => result._3 }
+      val fwc = marginalTestResults.map { result => result._4 }
+      allData += rh
+      allData += fh
+      allData += rwc
+      allData += fwc
+      allData += marginalTestResults.map { result => result._5 }
+      allData += marginalTestResults.map { result => result._6 }
+      allData += marginalTestResults.map { result => result._7 }
+      allData += marginalTestResults.map { result => result._8 }
+
+      Utils.csvWrite(csvFields, allData.toList, directory)
+
+      val (hmd, hmad) = Utils.getDifferences(rh, fh)
+      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
+
+      val writer = new PrintWriter(new File(rootDirectory + "MarginalMaleImageTestDifferences.txt"))
+      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
+      writer.write("Height MAD: " + hmad.toString + "\n")
+      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
+      writer.write("WC MAD: " + wcmad.toString)
+      writer.close()
+    }
+
+    println("Tests complete. Saved to file")
+  }
+
+  def fittingExperimentFemale(){
+
+    val rootDirectory = "data/female-test/"
+    val meshLm = LandmarkIO.readLandmarksJson[_3D](new File("data/mpi-training/mpi.json")).get.sortBy{lm => lm.id}
+    val meshReference = MeshIO.readMesh(new File("data/mpi-training/reference.stl")).get
+    val meshWaistAntID = meshReference.pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.anterior").head.point).id
+    val meshWaistPostID = meshReference.pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.posterior").head.point).id
+
+    val femaleModel = StatismoIO.readStatismoMeshModel(new File("data/femaleFBM.h5")).get
+    val femaleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/female.json")).get.filter(p => !p.id.contains("radial")).sortBy{lm => lm.id}
+
+    val augFemaleModel = augmentFittingModel(femaleModel, 0.005, 20.0)
+    val femaleModelContainer = modelContainer(augFemaleModel, femaleModelLm)
+
+    val marginalAugFemaleModel = marginalModelArmCut(augFemaleModel)
+    val marginalFemaleModelContainer = modelContainer(marginalAugFemaleModel, femaleModelLm)
+
+    val femaleMeshes = new File("data/mpi-female/").listFiles.filter{f => f.getName.contains("stl")}.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val realHeight: IndexedSeq[Double] = femaleMeshes.map{mesh => Measurement.measurePointHeight(mesh)}
+
+    val tlmsLandmarks = new File("data/image-female/").listFiles.filter{f => f.getName.contains("tlms")}.sortBy{f => f.getName}
+    val imageFiles = new File("data/image-female/").listFiles.filter{f => f.getName.contains("png")}.sortBy{f => f.getName}
+
+    val imgLmFront: IndexedSeq[IndexedSeq[TLMSLandmark2D]] = tlmsLandmarks.filter{f => f.getName.contains("Front")}.sortBy{f => f.getName}.map{f => TLMSLandmarksIO.read2D(f).get}.toIndexedSeq
+    val frontImages = imageFiles.filter{f => f.getName.contains("Front")}.sortBy{f => f.getName}.map{f => ImageIO.read(f)}
+    val targetLmFront: IndexedSeq[IndexedSeq[Landmark[_2D]]] = imgLmFront.indices.map{i =>
+      val lmHeightFront = imgLmFront(i).filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - imgLmFront(i).filter{p => p.id == "crown"}.head.point.y
+      val height = realHeight(i) * 1e3
+      val image = frontImages(i)
+      val scaleFactor = imageScalingFactor(height, image.getHeight, lmHeightFront)
+      val targetFront: IndexedSeq[Landmark[_2D]] = imgLmFront(i).map{l =>
+        val newPoint = Vector(l.point.x * scaleFactor, l.point.y * scaleFactor).toPoint
+        new Landmark[_2D](l.id, newPoint)
+      }
+      targetFront.sortBy(l => l.id)
+    }
+
+    val sideImages = imageFiles.filter{f => f.getName.contains("Side")}.sortBy{f => f.getName}.map{f => ImageIO.read(f)}
+    val imgLmSide: IndexedSeq[IndexedSeq[TLMSLandmark2D]] = tlmsLandmarks.filter{f => f.getName.contains("Side")}.sortBy{f => f.getName}.map{f => TLMSLandmarksIO.read2D(f).get}.toIndexedSeq
+    val targetLmSide: IndexedSeq[IndexedSeq[Landmark[_2D]]] = imgLmSide.indices.map{i =>
+      val lmHeightSide = imgLmSide(i).filter{p => p.id == "metatarsal-phalangeal.v.rt"}.head.point.y - imgLmSide(i).filter{p => p.id == "crown"}.head.point.y
+      val height = realHeight(i)
+      val image = sideImages(i)
+      val scaleFactor = imageScalingFactor(height, image.getHeight, lmHeightSide)
+      val targetFront: IndexedSeq[Landmark[_2D]] = imgLmSide(i).map{l =>
+        val newPoint = Vector(l.point.x * scaleFactor, l.point.y * scaleFactor).toPoint
+        new Landmark[_2D](l.id, newPoint)
+      }
+      targetFront.sortBy(l => l.id)
+    }
+
+    val targets = targetLmFront.indices.map{i =>
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.5, 0.05)
+      fittingModelContainer(fitData, femaleModelContainer)
+    }
+
+    val marginalTargets = targetLmFront.indices.map{i =>
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.5, 0.05)
+      fittingModelContainer(fitData, marginalFemaleModelContainer)
+    }
+
+    val bestFits: IndexedSeq[TriangleMesh[_3D]] = targets.map{target =>
+      val posterior = landmarkPosterior(target)
+      posterior.mean
+    }
+
+    val marginalBestFits: IndexedSeq[TriangleMesh[_3D]] = marginalTargets.map{target =>
+      val posterior = landmarkPosterior(target)
+      posterior.mean
+    }
+
+    val waistAntID = femaleModel.referenceMesh.pointSet.findClosestPoint(femaleModelLm.filter(p => p.id == "waist.anterior").head.point).id
+    val waistPostID = femaleModel.referenceMesh.pointSet.findClosestPoint(femaleModelLm.filter(p => p.id == "waist.posterior").head.point).id
+
+    {
+      val normalTestResults = bestFits.indices.map { i =>
+        val bestFit = bestFits(i)
+        val original = femaleMeshes(i)
+
+        val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+        val resultLm = femaleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(femaleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+        val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+
+        val avgDistance = MeshMetrics.avgDistance(alignedOriginal, bestFit)
+        val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedOriginal, bestFit)
+
+        val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+        val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+        val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+        val realHeight = Measurement.measurePointHeight(original) * 1e+3
+        val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+        val realVol = Measurement.getMeshVolume(original) * 1e3
+
+        (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+      }
+
+      var allData = new ListBuffer[Seq[Any]]
+      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
+      val directory = rootDirectory + "NormalFemaleImageTest.csv"
+
+      val rh = normalTestResults.map { result => result._1 }
+      val fh = normalTestResults.map { result => result._2 }
+      val rwc = normalTestResults.map { result => result._3 }
+      val fwc = normalTestResults.map { result => result._4 }
+      allData += rh
+      allData += fh
+      allData += rwc
+      allData += fwc
+      allData += normalTestResults.map { result => result._5 }
+      allData += normalTestResults.map { result => result._6 }
+      allData += normalTestResults.map { result => result._7 }
+      allData += normalTestResults.map { result => result._8 }
+
+      Utils.csvWrite(csvFields, allData.toList, directory)
+
+      val (hmd, hmad) = Utils.getDifferences(rh, fh)
+      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
+
+      val writer = new PrintWriter(new File(rootDirectory + "NormalFemaleImageTestDifferences.txt"))
+      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
+      writer.write("Height MAD: " + hmad.toString + "\n")
+      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
+      writer.write("WC MAD: " + wcmad.toString)
+      writer.close()
+    }
+
+    {
+      val cutTestResults = bestFits.indices.map { i =>
+        val bestFit = bestFits(i)
+        val original = femaleMeshes(i)
+
+        val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+        val resultLm = femaleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(femaleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+        val cutResult = modelMeshArmClip(bestFit)
+
+        val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+        val alignedCutOriginal = mpiFingerClip(alignedOriginal)
+
+        val avgDistance = MeshMetrics.avgDistance(alignedCutOriginal, cutResult)
+        val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedCutOriginal, cutResult)
+
+        val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+        val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+        val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+        val realHeight = Measurement.measurePointHeight(original) * 1e+3
+        val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+        val realVol = Measurement.getMeshVolume(original) * 1e3
+
+        (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+      }
+
+      var allData = new ListBuffer[Seq[Any]]
+      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
+      val directory = rootDirectory + "CutFemaleImageTest.csv"
+
+      val rh = cutTestResults.map { result => result._1 }
+      val fh = cutTestResults.map { result => result._2 }
+      val rwc = cutTestResults.map { result => result._3 }
+      val fwc = cutTestResults.map { result => result._4 }
+      allData += rh
+      allData += fh
+      allData += rwc
+      allData += fwc
+      allData += cutTestResults.map { result => result._5 }
+      allData += cutTestResults.map { result => result._6 }
+      allData += cutTestResults.map { result => result._7 }
+      allData += cutTestResults.map { result => result._8 }
+
+      Utils.csvWrite(csvFields, allData.toList, directory)
+
+      val (hmd, hmad) = Utils.getDifferences(rh, fh)
+      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
+
+      val writer = new PrintWriter(new File(rootDirectory + "CutFemaleImageTestDifferences.txt"))
+      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
+      writer.write("Height MAD: " + hmad.toString + "\n")
+      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
+      writer.write("WC MAD: " + wcmad.toString)
+      writer.close()
+    }
+
+    {
+      val marginalTestResults = marginalBestFits.indices.map { i =>
+        val bestFit = bestFits(i)
+        val original = femaleMeshes(i)
+
+        val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+        val resultLm = femaleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(femaleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+        val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+        val alignedCutOriginal = mpiFingerClip(alignedOriginal)
+
+        val avgDistance = MeshMetrics.avgDistance(alignedCutOriginal, bestFit)
+        val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedCutOriginal, bestFit)
+
+        val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+        val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+        val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+        val realHeight = Measurement.measurePointHeight(original) * 1e+3
+        val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+        val realVol = Measurement.getMeshVolume(original) * 1e3
+
+        (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+      }
+
+      var allData = new ListBuffer[Seq[Any]]
+      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
+      val directory = rootDirectory + "MarginalFemaleImageTest.csv"
+
+      val rh = marginalTestResults.map { result => result._1 }
+      val fh = marginalTestResults.map { result => result._2 }
+      val rwc = marginalTestResults.map { result => result._3 }
+      val fwc = marginalTestResults.map { result => result._4 }
+      allData += rh
+      allData += fh
+      allData += rwc
+      allData += fwc
+      allData += marginalTestResults.map { result => result._5 }
+      allData += marginalTestResults.map { result => result._6 }
+      allData += marginalTestResults.map { result => result._7 }
+      allData += marginalTestResults.map { result => result._8 }
+
+      Utils.csvWrite(csvFields, allData.toList, directory)
+
+      val (hmd, hmad) = Utils.getDifferences(rh, fh)
+      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
+
+      val writer = new PrintWriter(new File(rootDirectory + "MarginalFemaleImageTestDifferences.txt"))
+      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
+      writer.write("Height MAD: " + hmad.toString + "\n")
+      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
+      writer.write("WC MAD: " + wcmad.toString)
+      writer.close()
+    }
+
+    println("Tests complete. Saved to file")
+  }
 
   def fittingTestLandmark(l: Double, s: Double): Unit = {
 
     val maleModel = StatismoIO.readStatismoMeshModel(new File("data/maleFBM.h5")).get
     val femaleModel = StatismoIO.readStatismoMeshModel(new File("data/femaleFBM.h5")).get
 
-    val augMaleModel = augmentFittingModel(maleModel, l, s)
-    val augFemaleModel = augmentFittingModel(femaleModel, l, s)
+    val maleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/male.json")).get.filter(p => !p.id.contains("radial")).sortBy{lm => lm.id}
+    val femaleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/female.json")).get.filter(p => !p.id.contains("radial")).sortBy{lm => lm.id}
 
-    val maleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/male.json")).get.sortBy{lm => lm.id}
-    val femaleModelLm = LandmarkIO.readLandmarksJson[_3D](new File("data/fbm-landmarks/female.json")).get.sortBy{lm => lm.id}
+    val augMaleModel = marginalModelArmCut(augmentFittingModel(maleModel, l, s))
+    val augFemaleModel = augmentFittingModel(femaleModel, l, s)
 
     val maleModelContainer = modelContainer(augMaleModel, maleModelLm)
     val femaleModelContainer = modelContainer(augFemaleModel, femaleModelLm)
 
     val meshLm = LandmarkIO.readLandmarksJson[_3D](new File("data/mpi-training/mpi.json")).get.sortBy{lm => lm.id}
-    val meshes = new File("data/mpi-training/").listFiles.filter{f => f.getName.contains("stl") && !f.getName.contains("arm")}.sortBy{f => f.getName}.take(2).map{f => MeshIO.readMesh(f).get}
+    val meshes = new File("data/mpi-training/").listFiles.filter{f => f.getName.contains("stl") && !f.getName.contains("reference")}.sortBy{f => f.getName}.take(1).map{f => MeshIO.readMesh(f).get}
 
-    val meshReference = meshes(0)
-
-    val meshWaistAntID = meshes(0).pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.anterior").head.point).id
-    val meshWaistPostID = meshes(0).pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.posterior").head.point).id
+    val meshReference = MeshIO.readMesh(new File("data/mpi-training/reference.stl")).get
+    val meshWaistAntID = meshReference.pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.anterior").head.point).id
+    val meshWaistPostID = meshReference.pointSet.findClosestPoint(meshLm.filter(p => p.id == "waist.posterior").head.point).id
 
     val realHeight: IndexedSeq[Double] = meshes.map{mesh => Measurement.measurePointHeight(mesh)}//Source.fromFile("data/image-landmarks/height.txt").getLines().toIndexedSeq.map{h => h.toDouble}
     val realWC: IndexedSeq[Double] = meshes.map{mesh => Measurement.getWaistCircumference(mesh, mesh.pointSet.point(meshWaistAntID), mesh.pointSet.point(meshWaistPostID)) * 1e3}
     val realVol: IndexedSeq[Double] = meshes.map{mesh => Measurement.getMeshVolume(mesh) * 1e3}
 
-    val sex: IndexedSeq[String] = Source.fromFile("data/image-landmarks/sex.txt").getLines().toIndexedSeq
+    val sexFile = Source.fromFile("data/image-landmarks/sex.txt")
+    val sex: IndexedSeq[String] = sexFile.getLines().toIndexedSeq
+    sexFile.close()
     val tlmsLandmarks = new File("data/image-landmarks/").listFiles.filter{f => f.getName.contains("tlms")}.sortBy{f => f.getName}
     val imageFiles = new File("data/image-landmarks/").listFiles.filter{f => f.getName.contains("png")}.sortBy{f => f.getName}
 
@@ -128,7 +614,7 @@ object Fitting {
 
     // Load data into container object
     val targets = targetLmFront.indices.map{i =>
-      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.withNameWithDefault(sex(i)))
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.withNameWithDefault(sex(i)), 0.5, 0.05)
       var fittingModelContainer: fittingModelContainer = null
       if (fitData.sex == sexEnum.MALE){
         fittingModelContainer = new fittingModelContainer(fitData, maleModelContainer)
@@ -162,18 +648,15 @@ object Fitting {
       val result = results(i)._1
 
       val meshLms = meshLm.map{lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id))}
-      val resultLm = maleModelLm.map{lm => new Landmark[_3D](lm.id, result.pointSet.point(maleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id))}
+      val resultLm = femaleModelLm.map{lm => new Landmark[_3D](lm.id, result.pointSet.point(augFemaleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id))}
 
-      val cutOriginal = original//meshFingerClip(original, meshLms.toIndexedSeq)
-      val cutResult = meshArmClip(result, resultLm.toIndexedSeq)
+      val cutResult = modelMeshArmClip(result)
 
-      val alignedCutOriginala = cutOriginal.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(result)))
-      val ameshLms = meshLm.map{lm => new Landmark[_3D](lm.id, alignedCutOriginala.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id))}
-      val alignedCutOriginal = meshFingerClip(alignedCutOriginala, ameshLms.toIndexedSeq)
+      val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(result)))
+      val alignedCutOriginal = mpiFingerClip(alignedOriginal)
 
       println(MeshMetrics.avgDistance(alignedCutOriginal, cutResult))
       println(Hausdorff.modifiedHausdorffDistance(alignedCutOriginal, cutResult))
-
 
       ui.show(resultGroups(i), cutResult, "Fitted: " + i.toString)
       ui.show(resultGroups(i), alignedCutOriginal, "Original: " + i.toString)
@@ -196,6 +679,8 @@ object Fitting {
     val modelLm = fittingModel.modelCon.modelLM
     val targetLmFront = fittingModel.fitData.lmFront
     val targetLmSide = fittingModel.fitData.lmSide
+    val frontNoise = fittingModel.fitData.frontNoise
+    val sideNoise = fittingModel.fitData.sideNoise
 
     val targetLmFront3D = targetLmFront.map{l => new Landmark[_3D](l.id, Point3D(l.point.x, l.point.y, 0.0))}
 
@@ -211,7 +696,7 @@ object Fitting {
       filtered.nonEmpty
     }.sortBy(l => l.id)
 
-    val littleNoiseFront = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * 0.005)
+    val littleNoiseFront = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * frontNoise)
     littleNoiseFront.cov.data(8) = Double.MaxValue
 
     val referenceMesh = model.referenceMesh
@@ -225,7 +710,7 @@ object Fitting {
 
     val posteriorFront = model.posterior(regressionDataFront.toIndexedSeq)
 
-    val littleNoiseSide = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * 0.001)
+    val littleNoiseSide = MultivariateNormalDistribution(DenseVector.zeros[Double](3), DenseMatrix.eye[Double](3) * sideNoise)
     littleNoiseSide.cov.data(0) = Double.MaxValue
 
     val posteriorLmSide = modelLmSide.map{lm => new Landmark[_3D](lm.id, posteriorFront.referenceMesh.pointSet.point(model.referenceMesh.pointSet.findClosestPoint(lm.point).id))}
@@ -240,64 +725,59 @@ object Fitting {
     val posteriorSide = posteriorFront.posterior(regressionDataSide.toIndexedSeq)
 
     posteriorSide
-    //posteriorFront
   }
 
-  def meshArmClip(mesh: TriangleMesh[_3D], meshLm: IndexedSeq[Landmark[_3D]]): TriangleMesh[_3D] = {
-    val pid: IndexedSeq[Int] = Source.fromFile("data/mpi-training/armid.txt").getLines().map{id => id.toInt}.toIndexedSeq
+  /**
+    * Removes forearm from statistical mesh model generataed mesh
+    *
+    * Parameters:
+    *    -   `mesh` Mesh to be clipped
+    * Returns:
+    *    -  Clipped mesh
+    */
+  def modelMeshArmClip(mesh: TriangleMesh[_3D]): TriangleMesh[_3D] = {
+    val file = Source.fromFile("data/fbm-landmarks/armid.txt")
+    val pid: IndexedSeq[Int] = file.getLines().map{id => id.toInt}.toIndexedSeq
+    file.close()
     val points = pid.map{id => mesh.pointSet.point(PointId(id))}
     mesh.operations.clip(p => {points.contains(p)})
   }
 
-  def meshFingerClip(mesh: TriangleMesh[_3D], meshLm: IndexedSeq[Landmark[_3D]]): TriangleMesh[_3D] = {
-    val radialRt = mesh.pointSet.findClosestPoint(meshLm.filter(p => p.id.contains("radial-styloid.rt")).head.point).point.toVector
-    val radialLt = mesh.pointSet.findClosestPoint(meshLm.filter(p => p.id.contains("radial-styloid.lt")).head.point).point.toVector
-    val fingertipRt = mesh.pointSet.findClosestPoint(meshLm.filter(p => p.id.contains("fingertip.rt")).head.point).point.toVector
-    val fingertipLt = mesh.pointSet.findClosestPoint(meshLm.filter(p => p.id.contains("fingertip.lt")).head.point).point.toVector
-
-    val pointsRadialRt = mesh.pointSet.findNClosestPoints(radialRt.toPoint, 600).map{p => p.point}
-    val pointsRadialLt = mesh.pointSet.findNClosestPoints(radialLt.toPoint, 600).map{p => p.point}
-    val meshCut = mesh.operations.clip(p => {pointsRadialRt.contains(p) || pointsRadialLt.contains(p)})
-
-    val pointsFingerRt = meshCut.pointSet.findNClosestPoints(fingertipRt.toPoint, 281).map{p => p.point}
-    val pointsFingerLt = meshCut.pointSet.findNClosestPoints(fingertipLt.toPoint, 281).map{p => p.point}
-    meshCut.operations.clip(p => {pointsFingerRt.contains(p) || pointsFingerLt.contains(p)})
+  /**
+    * Removes forearm from MPI mesh
+    *
+    * Parameters:
+    *    -   `mesh` MPI mesh to be clipped
+    * Returns:
+    *    -  Clipped mesh
+    */
+  def mpiFingerClip(mesh: TriangleMesh[_3D]): TriangleMesh[_3D] = {
+    val file = Source.fromFile("data/mpi-training/mpiArm.txt")
+    val pid: IndexedSeq[Int] = file.getLines().map{id => id.toInt}.toIndexedSeq
+    file.close()
+    // To account for missing vertices, cross filter first before clipping
+    val meshSeq = mesh.pointSet.pointIds.toIndexedSeq.map{f => f.id}
+    val points = pid.filter{id =>
+      val filtered = meshSeq.filter(_ == id)
+      filtered.nonEmpty
+    }
+    mesh.operations.clip(p => {points.contains(mesh.pointSet.pointId(p).get.id)})
   }
 
-  def get2DPoints(mesh: TriangleMesh[_3D], pointIDs: IndexedSeq[PointId], bearingAngle: Float, orientation: orientationEnum): IndexedSeq[Point[_2D]] = {
-    // Center the volume
-    val centre = mesh.boundingBox.origin.toVector + mesh.boundingBox.extent*0.5 //computeCentreOfMass(mesh).toVector
-    //instead of creating the volume do this. You get: width, length and height of the mesh bounding box
-    val coords3D = IntVector((mesh.boundingBox.oppositeCorner(0) - mesh.boundingBox.origin(0)).round.toInt,
-      (mesh.boundingBox.oppositeCorner(1) - mesh.boundingBox.origin(1)).round.toInt,
-      (mesh.boundingBox.oppositeCorner(2) - mesh.boundingBox.origin(2)).round.toInt
-    )
-
-    //then do
-    val firstDim = coords3D(0)
-    val secondDim = coords3D(2)
-
-    val pointConverter: imageParameters = imageParameters.iniImage.copy(
-      // Pitch, yaw, roll
-      view = ViewParameter(centre, math.toRadians(0),math.toRadians(0),math.toRadians(bearingAngle)),
-      camera = imageParameters.iniImage.camera.copy(orthographic = true, sensorSize = Vector(secondDim, secondDim)),
-      imageSize = imageSize(firstDim, secondDim)
-    )
-    val targetLms: IndexedSeq[Point[_3D]] = pointIDs.map{pid => mesh.pointSet.point(pid)}
-    val target2DPoints = targetLms.map{lm =>
-      val imagePlanePoint = pointConverter.renderTransform(lm)
-      var pointDim = 0.0
-
-      if (orientation == orientationEnum.FRONT){
-        pointDim = imagePlanePoint.z
-      }
-      else {
-        pointDim = imagePlanePoint.x
-      }
-
-      Point(pointDim,imagePlanePoint.y)
-    }
-    target2DPoints
+  /**
+    * Create marginal shape model without arms
+    *
+    * Parameters:
+    *    -   `model` Statistical mesh model to marginalise
+    * Returns:
+    *    -  Marginal statistical mesh model
+    */
+  def marginalModelArmCut(model: StatisticalMeshModel): StatisticalMeshModel = {
+    val file = Source.fromFile("data/fbm-landmarks/armid.txt")
+    val pid = file.getLines().map{id => id.toInt}.toIndexedSeq.map{p => PointId(p)}
+    val points = model.referenceMesh.pointSet.points.toIndexedSeq.map{p => model.referenceMesh.pointSet.pointId(p).get}.filter(p => !pid.contains(p))
+    file.close()
+    model.marginal(points)
   }
 
   /**
@@ -320,61 +800,21 @@ object Fitting {
     scalingFactor * dimensionScaler
   }
 
-  def get3DPoints(mesh: TriangleMesh[_3D], pid: PointId, bearingAngle: Float = 0): Point[_3D] = {
-    val centreOfMass = mesh.boundingBox.origin.toVector + mesh.boundingBox.extent*0.5 //computeCenterOfMass(mesh).toVector
-    //instead of creating the volume do this. You get: width, length and height of the mesh bounding box
-    val coords3D = IntVector((mesh.boundingBox.oppositeCorner(0) - mesh.boundingBox.origin(0)).round.toInt,
-      (mesh.boundingBox.oppositeCorner(1) - mesh.boundingBox.origin(1)).round.toInt,
-      (mesh.boundingBox.oppositeCorner(2) - mesh.boundingBox.origin(2)).round.toInt
-    )
-
-    //then do
-    val firstDim = coords3D(0)
-    val secondDim = coords3D(2)
-
-    val pointConverter: imageParameters = imageParameters.iniImage.copy(
-      // Pitch, yaw, roll
-      camera = imageParameters.iniImage.camera.copy(orthographic = true, sensorSize = Vector(firstDim, secondDim)),
-      imageSize = imageSize(firstDim, secondDim),
-      view = ViewParameter(centreOfMass, math.toRadians(0),math.toRadians(0),math.toRadians(bearingAngle))
-    )
-
-    pointConverter.inverseRenderTransform(mesh.pointSet.point(pid))
-  }
-
-  def getProjectedPoint(mesh: TriangleMesh[_3D], point: Point[_3D], pixelHeight: Double, realHeight: Double = 1.3): Point[_3D] = {
-
-    val centreOfMass = mesh.boundingBox.origin.toVector + mesh.boundingBox.extent*0.5 //computeCenterOfMass(mesh).toVector
-    //instead of creating the volume do this. You get: width, length and height of the mesh bounding box
-    val coords3D = IntVector((mesh.boundingBox.oppositeCorner(0) - mesh.boundingBox.origin(0)).round.toInt,
-      (mesh.boundingBox.oppositeCorner(1) - mesh.boundingBox.origin(1)).round.toInt,
-      (mesh.boundingBox.oppositeCorner(2) - mesh.boundingBox.origin(2)).round.toInt
-    )
-
-    //then do
-    val firstDim = coords3D(0)
-    val secondDim = coords3D(2)
-
-    val meshHeight = Measurement.measurePointHeight(mesh)
-    val scaler = meshHeight/realHeight
-
-    val pointConverter: imageParameters = imageParameters.iniImage.copy(
-      // Pitch, yaw, roll
-      camera = imageParameters.iniImage.camera.copy(orthographic = true, sensorSize = Vector(firstDim, secondDim)),
-      imageSize = imageSize(firstDim, secondDim),
-      view = ViewParameter(centreOfMass, math.toRadians(0),math.toRadians(0),math.toRadians(0))
-    )
-
-    pointConverter.inverseRenderTransform(Vector(point.x * scaler, point.y * scaler, point.z).toPoint)
-  }
-
+  /**
+    * Computes mesh centre of mass
+    *
+    * Parameters:
+    *    -   `mesh` Mesh to have centre of mass calculated
+    * Returns:
+    *    -  Centre of mass point
+    */
   def computeCentreOfMass(mesh: TriangleMesh[_3D]): Point[_3D] = {
     val normFactor = 1.0 / mesh.pointSet.numberOfPoints
     mesh.pointSet.points.foldLeft(Point(0, 0, 0))((sum, point) => sum + point.toVector * normFactor)
   }
 
-  def augmentFittingModel (model: StatisticalMeshModel, l: Double, s: Double): StatisticalMeshModel = {
-    val scalarValuedKernel = GaussianKernel[_3D](s) * l
+  def augmentFittingModel (model: StatisticalMeshModel, l: Double, sig: Double): StatisticalMeshModel = {
+    val scalarValuedKernel = GaussianKernel[_3D](sig) * l
 
     case class XmirroredKernel(kernel : PDKernel[_3D]) extends PDKernel[_3D] {
       override def domain = RealSpace[_3D]
@@ -412,7 +852,7 @@ object Fitting {
       orientationEnum.values.find(_.toString.toLowerCase == s.toLowerCase()).getOrElse(UNKNOWN)
   }
 
-  private case class fittingData(lmFront: IndexedSeq[Landmark[_2D]], lmSide: IndexedSeq[Landmark[_2D]], sex: sexEnum){
+  private case class fittingData(lmFront: IndexedSeq[Landmark[_2D]], lmSide: IndexedSeq[Landmark[_2D]], sex: sexEnum, frontNoise: Double, sideNoise: Double){
     def getLmFront: IndexedSeq[Landmark[_2D]] = lmFront
     def getLmSide: IndexedSeq[Landmark[_2D]] = lmSide
     def getSex: sexEnum = sex
