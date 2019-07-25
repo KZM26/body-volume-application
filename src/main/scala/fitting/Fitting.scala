@@ -83,6 +83,8 @@ object Fitting {
     val marginalAugMaleModel = marginalModelArmCut(augMaleModel)
     val marginalMaleModelContainer = modelContainer(marginalAugMaleModel, maleModelLm)
 
+    val baseMaleModelContainer = modelContainer(maleModel, maleModelLm)
+
     val maleMeshes = new File("data/mpi-male/").listFiles.filter{f => f.getName.contains("stl")}.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
     val realHeight: IndexedSeq[Double] = maleMeshes.map{mesh => Measurement.measurePointHeight(mesh)}
 
@@ -117,14 +119,24 @@ object Fitting {
       targetFront.sortBy(l => l.id)
     }
 
+    val baseTargets = targetLmFront.indices.map{i =>
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, 0.5, 0.05)
+      fittingModelContainer(fitData, baseMaleModelContainer)
+    }
+
     val targets = targetLmFront.indices.map{i =>
-      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.0045, 0.001)
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, 0.0045, 0.001)
       fittingModelContainer(fitData, maleModelContainer)
     }
 
     val marginalTargets = targetLmFront.indices.map{i =>
-      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.0045, 0.001)
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, 0.0045, 0.001)
       fittingModelContainer(fitData, marginalMaleModelContainer)
+    }
+
+    val baseBestFits: IndexedSeq[TriangleMesh[_3D]] = baseTargets.map{target =>
+      val posterior = landmarkPosterior(target)
+      posterior.mean
     }
 
     val bestFits: IndexedSeq[TriangleMesh[_3D]] = targets.map{target =>
@@ -140,8 +152,31 @@ object Fitting {
     val waistAntID = maleModel.referenceMesh.pointSet.findClosestPoint(maleModelLm.filter(p => p.id == "waist.anterior").head.point).id
     val waistPostID = maleModel.referenceMesh.pointSet.findClosestPoint(maleModelLm.filter(p => p.id == "waist.posterior").head.point).id
 
-    {
-      val normalTestResults = bestFits.indices.map { i =>
+    val baseTestResults = baseBestFits.indices.map { i =>
+      val bestFit = bestFits(i)
+      val original = maleMeshes(i)
+
+      val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+      val resultLm = maleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(maleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+      val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+
+      val avgDistance = MeshMetrics.avgDistance(alignedOriginal, bestFit)
+      val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedOriginal, bestFit)
+
+      val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+      val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+      val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+      val realHeight = Measurement.measurePointHeight(original) * 1e+3
+      val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+      val realVol = Measurement.getMeshVolume(original) * 1e3
+
+      (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+    }
+    writeExperimentToFile(baseTestResults, rootDirectory + "BaseMale")
+
+    val modBaseTestResults = bestFits.indices.map { i =>
         val bestFit = bestFits(i)
         val original = maleMeshes(i)
 
@@ -163,39 +198,9 @@ object Fitting {
 
         (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
       }
+    writeExperimentToFile(modBaseTestResults, rootDirectory + "ModBaseMale")
 
-      var allData = new ListBuffer[Seq[Any]]
-      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
-      val directory = rootDirectory + "NormalMaleImageTest.csv"
-
-      val rh = normalTestResults.map { result => result._1 }
-      val fh = normalTestResults.map { result => result._2 }
-      val rwc = normalTestResults.map { result => result._3 }
-      val fwc = normalTestResults.map { result => result._4 }
-      allData += rh
-      allData += fh
-      allData += rwc
-      allData += fwc
-      allData += normalTestResults.map { result => result._5 }
-      allData += normalTestResults.map { result => result._6 }
-      allData += normalTestResults.map { result => result._7 }
-      allData += normalTestResults.map { result => result._8 }
-
-      Utils.csvWrite(csvFields, allData.toList, directory)
-
-      val (hmd, hmad) = Utils.getDifferences(rh, fh)
-      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
-
-      val writer = new PrintWriter(new File(rootDirectory + "NormalMaleImageTestDifferences.txt"))
-      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
-      writer.write("Height MAD: " + hmad.toString + "\n")
-      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
-      writer.write("WC MAD: " + wcmad.toString)
-      writer.close()
-    }
-
-    {
-      val cutTestResults = bestFits.indices.map { i =>
+    val cutTestResults = bestFits.indices.map { i =>
         val bestFit = bestFits(i)
         val original = maleMeshes(i)
 
@@ -220,39 +225,9 @@ object Fitting {
 
         (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
       }
+    writeExperimentToFile(cutTestResults, rootDirectory + "CutMale")
 
-      var allData = new ListBuffer[Seq[Any]]
-      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
-      val directory = rootDirectory + "CutMaleImageTest.csv"
-
-      val rh = cutTestResults.map { result => result._1 }
-      val fh = cutTestResults.map { result => result._2 }
-      val rwc = cutTestResults.map { result => result._3 }
-      val fwc = cutTestResults.map { result => result._4 }
-      allData += rh
-      allData += fh
-      allData += rwc
-      allData += fwc
-      allData += cutTestResults.map { result => result._5 }
-      allData += cutTestResults.map { result => result._6 }
-      allData += cutTestResults.map { result => result._7 }
-      allData += cutTestResults.map { result => result._8 }
-
-      Utils.csvWrite(csvFields, allData.toList, directory)
-
-      val (hmd, hmad) = Utils.getDifferences(rh, fh)
-      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
-
-      val writer = new PrintWriter(new File(rootDirectory + "CutMaleImageTestDifferences.txt"))
-      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
-      writer.write("Height MAD: " + hmad.toString + "\n")
-      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
-      writer.write("WC MAD: " + wcmad.toString)
-      writer.close()
-    }
-
-    {
-      val marginalTestResults = marginalBestFits.indices.map { i =>
+    val marginalTestResults = marginalBestFits.indices.map { i =>
         val bestFit = bestFits(i)
         val original = maleMeshes(i)
 
@@ -275,36 +250,7 @@ object Fitting {
 
         (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
       }
-
-      var allData = new ListBuffer[Seq[Any]]
-      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
-      val directory = rootDirectory + "MarginalMaleImageTest.csv"
-
-      val rh = marginalTestResults.map { result => result._1 }
-      val fh = marginalTestResults.map { result => result._2 }
-      val rwc = marginalTestResults.map { result => result._3 }
-      val fwc = marginalTestResults.map { result => result._4 }
-      allData += rh
-      allData += fh
-      allData += rwc
-      allData += fwc
-      allData += marginalTestResults.map { result => result._5 }
-      allData += marginalTestResults.map { result => result._6 }
-      allData += marginalTestResults.map { result => result._7 }
-      allData += marginalTestResults.map { result => result._8 }
-
-      Utils.csvWrite(csvFields, allData.toList, directory)
-
-      val (hmd, hmad) = Utils.getDifferences(rh, fh)
-      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
-
-      val writer = new PrintWriter(new File(rootDirectory + "MarginalMaleImageTestDifferences.txt"))
-      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
-      writer.write("Height MAD: " + hmad.toString + "\n")
-      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
-      writer.write("WC MAD: " + wcmad.toString)
-      writer.close()
-    }
+    writeExperimentToFile(marginalTestResults, rootDirectory + "MarginalMale")
 
     println("Tests complete. Saved to file")
   }
@@ -325,6 +271,8 @@ object Fitting {
 
     val marginalAugFemaleModel = marginalModelArmCut(augFemaleModel)
     val marginalFemaleModelContainer = modelContainer(marginalAugFemaleModel, femaleModelLm)
+
+    val baseFemaleModelContainer = modelContainer(femaleModel, femaleModelLm)
 
     val femaleMeshes = new File("data/mpi-female/").listFiles.filter{f => f.getName.contains("stl")}.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
     val realHeight: IndexedSeq[Double] = femaleMeshes.map{mesh => Measurement.measurePointHeight(mesh)}
@@ -360,14 +308,24 @@ object Fitting {
       targetFront.sortBy(l => l.id)
     }
 
+    val baseTargets = targetLmFront.indices.map{i =>
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, 0.5, 0.05)
+      fittingModelContainer(fitData, baseFemaleModelContainer)
+    }
+
     val targets = targetLmFront.indices.map{i =>
-      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.5, 0.05)
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, 0.5, 0.05)
       fittingModelContainer(fitData, femaleModelContainer)
     }
 
     val marginalTargets = targetLmFront.indices.map{i =>
-      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.MALE, 0.5, 0.05)
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, 0.5, 0.05)
       fittingModelContainer(fitData, marginalFemaleModelContainer)
+    }
+
+    val baseBestFits: IndexedSeq[TriangleMesh[_3D]] = baseTargets.map{target =>
+      val posterior = landmarkPosterior(target)
+      posterior.mean
     }
 
     val bestFits: IndexedSeq[TriangleMesh[_3D]] = targets.map{target =>
@@ -383,8 +341,31 @@ object Fitting {
     val waistAntID = femaleModel.referenceMesh.pointSet.findClosestPoint(femaleModelLm.filter(p => p.id == "waist.anterior").head.point).id
     val waistPostID = femaleModel.referenceMesh.pointSet.findClosestPoint(femaleModelLm.filter(p => p.id == "waist.posterior").head.point).id
 
-    {
-      val normalTestResults = bestFits.indices.map { i =>
+    val baseTestResults = baseBestFits.indices.map { i =>
+      val bestFit = bestFits(i)
+      val original = femaleMeshes(i)
+
+      val meshLms = meshLm.map { lm => new Landmark[_3D](lm.id, original.pointSet.point(meshReference.pointSet.findClosestPoint(lm.point).id)) }
+      val resultLm = femaleModelLm.map { lm => new Landmark[_3D](lm.id, bestFit.pointSet.point(femaleModel.referenceMesh.pointSet.findClosestPoint(lm.point).id)) }
+
+      val alignedOriginal = original.transform(LandmarkRegistration.rigid3DLandmarkRegistration(meshLms, resultLm, computeCentreOfMass(bestFit)))
+
+      val avgDistance = MeshMetrics.avgDistance(alignedOriginal, bestFit)
+      val hausdorff = Hausdorff.modifiedHausdorffDistance(alignedOriginal, bestFit)
+
+      val heightPosterior = Measurement.measurePointHeight(bestFit) * 1e+3
+      val wcPosterior = Measurement.getWaistCircumference(bestFit, bestFit.pointSet.point(waistAntID), bestFit.pointSet.point(waistPostID)) * 1e+3
+      val volPosterior = Measurement.getMeshVolume(bestFit) * 1e+3
+
+      val realHeight = Measurement.measurePointHeight(original) * 1e+3
+      val realWC = Measurement.getWaistCircumference(original, original.pointSet.point(meshWaistAntID), original.pointSet.point(meshWaistPostID)) * 1e3
+      val realVol = Measurement.getMeshVolume(original) * 1e3
+
+      (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
+    }
+    writeExperimentToFile(baseTestResults, rootDirectory + "BaseFemale")
+
+    val modBaseTestResults = bestFits.indices.map { i =>
         val bestFit = bestFits(i)
         val original = femaleMeshes(i)
 
@@ -406,39 +387,9 @@ object Fitting {
 
         (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
       }
+    writeExperimentToFile(modBaseTestResults, rootDirectory + "ModBaseFemale")
 
-      var allData = new ListBuffer[Seq[Any]]
-      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
-      val directory = rootDirectory + "NormalFemaleImageTest.csv"
-
-      val rh = normalTestResults.map { result => result._1 }
-      val fh = normalTestResults.map { result => result._2 }
-      val rwc = normalTestResults.map { result => result._3 }
-      val fwc = normalTestResults.map { result => result._4 }
-      allData += rh
-      allData += fh
-      allData += rwc
-      allData += fwc
-      allData += normalTestResults.map { result => result._5 }
-      allData += normalTestResults.map { result => result._6 }
-      allData += normalTestResults.map { result => result._7 }
-      allData += normalTestResults.map { result => result._8 }
-
-      Utils.csvWrite(csvFields, allData.toList, directory)
-
-      val (hmd, hmad) = Utils.getDifferences(rh, fh)
-      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
-
-      val writer = new PrintWriter(new File(rootDirectory + "NormalFemaleImageTestDifferences.txt"))
-      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
-      writer.write("Height MAD: " + hmad.toString + "\n")
-      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
-      writer.write("WC MAD: " + wcmad.toString)
-      writer.close()
-    }
-
-    {
-      val cutTestResults = bestFits.indices.map { i =>
+    val cutTestResults = bestFits.indices.map { i =>
         val bestFit = bestFits(i)
         val original = femaleMeshes(i)
 
@@ -463,39 +414,9 @@ object Fitting {
 
         (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
       }
+    writeExperimentToFile(cutTestResults, rootDirectory + "CutFemale")
 
-      var allData = new ListBuffer[Seq[Any]]
-      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
-      val directory = rootDirectory + "CutFemaleImageTest.csv"
-
-      val rh = cutTestResults.map { result => result._1 }
-      val fh = cutTestResults.map { result => result._2 }
-      val rwc = cutTestResults.map { result => result._3 }
-      val fwc = cutTestResults.map { result => result._4 }
-      allData += rh
-      allData += fh
-      allData += rwc
-      allData += fwc
-      allData += cutTestResults.map { result => result._5 }
-      allData += cutTestResults.map { result => result._6 }
-      allData += cutTestResults.map { result => result._7 }
-      allData += cutTestResults.map { result => result._8 }
-
-      Utils.csvWrite(csvFields, allData.toList, directory)
-
-      val (hmd, hmad) = Utils.getDifferences(rh, fh)
-      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
-
-      val writer = new PrintWriter(new File(rootDirectory + "CutFemaleImageTestDifferences.txt"))
-      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
-      writer.write("Height MAD: " + hmad.toString + "\n")
-      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
-      writer.write("WC MAD: " + wcmad.toString)
-      writer.close()
-    }
-
-    {
-      val marginalTestResults = marginalBestFits.indices.map { i =>
+    val marginalTestResults = marginalBestFits.indices.map { i =>
         val bestFit = bestFits(i)
         val original = femaleMeshes(i)
 
@@ -518,38 +439,41 @@ object Fitting {
 
         (realHeight, heightPosterior, realWC, wcPosterior, realVol, volPosterior, avgDistance, hausdorff)
       }
-
-      var allData = new ListBuffer[Seq[Any]]
-      val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
-      val directory = rootDirectory + "MarginalFemaleImageTest.csv"
-
-      val rh = marginalTestResults.map { result => result._1 }
-      val fh = marginalTestResults.map { result => result._2 }
-      val rwc = marginalTestResults.map { result => result._3 }
-      val fwc = marginalTestResults.map { result => result._4 }
-      allData += rh
-      allData += fh
-      allData += rwc
-      allData += fwc
-      allData += marginalTestResults.map { result => result._5 }
-      allData += marginalTestResults.map { result => result._6 }
-      allData += marginalTestResults.map { result => result._7 }
-      allData += marginalTestResults.map { result => result._8 }
-
-      Utils.csvWrite(csvFields, allData.toList, directory)
-
-      val (hmd, hmad) = Utils.getDifferences(rh, fh)
-      val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
-
-      val writer = new PrintWriter(new File(rootDirectory + "MarginalFemaleImageTestDifferences.txt"))
-      writer.write("Height MD (real - fit): " + hmd.toString + "\n")
-      writer.write("Height MAD: " + hmad.toString + "\n")
-      writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
-      writer.write("WC MAD: " + wcmad.toString)
-      writer.close()
-    }
+    writeExperimentToFile(marginalTestResults, rootDirectory + "MarginalFemale")
 
     println("Tests complete. Saved to file")
+  }
+
+  def writeExperimentToFile(testResults: IndexedSeq[(Double, Double, Double, Double, Double, Double, Double, Double)], directoryTestType: String): Unit = {
+
+    var allData = new ListBuffer[Seq[Any]]
+    val csvFields = Seq("Mesh Height", "Best Fit Height", "Best Fit WC", "Mesh WC", "Mesh Volume", "Best Fit Vol", "Average Distance", "Hausdorff Distance")
+    val directory = directoryTestType + "ImageTest.csv"
+
+    val rh = testResults.map { result => result._1 }
+    val fh = testResults.map { result => result._2 }
+    val rwc = testResults.map { result => result._3 }
+    val fwc = testResults.map { result => result._4 }
+    allData += rh
+    allData += fh
+    allData += rwc
+    allData += fwc
+    allData += testResults.map { result => result._5 }
+    allData += testResults.map { result => result._6 }
+    allData += testResults.map { result => result._7 }
+    allData += testResults.map { result => result._8 }
+
+    Utils.csvWrite(csvFields, allData.toList, directory)
+
+    val (hmd, hmad) = Utils.getDifferences(rh, fh)
+    val (wcmd, wcmad) = Utils.getDifferences(rwc, fwc)
+
+    val writer = new PrintWriter(new File(directoryTestType + "ImageTestDifferences.txt"))
+    writer.write("Height MD (real - fit): " + hmd.toString + "\n")
+    writer.write("Height MAD: " + hmad.toString + "\n")
+    writer.write("WC MD (real - fit): " + wcmd.toString + "\n")
+    writer.write("WC MAD: " + wcmad.toString)
+    writer.close()
   }
 
   def fittingTestLandmark(l: Double, s: Double): Unit = {
@@ -614,9 +538,9 @@ object Fitting {
 
     // Load data into container object
     val targets = targetLmFront.indices.map{i =>
-      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, sexEnum.withNameWithDefault(sex(i)), 0.5, 0.05)
+      val fitData = fittingData(targetLmFront(i), targetLmSide(i).filter{lm => lm.id.contains("waist") || lm.id.contains("thelion")}, 0.5, 0.05)
       var fittingModelContainer: fittingModelContainer = null
-      if (fitData.sex == sexEnum.MALE){
+      if (sexEnum.withNameWithDefault(sex(i)) == sexEnum.MALE){
         fittingModelContainer = new fittingModelContainer(fitData, maleModelContainer)
       }
       else {
@@ -852,10 +776,9 @@ object Fitting {
       orientationEnum.values.find(_.toString.toLowerCase == s.toLowerCase()).getOrElse(UNKNOWN)
   }
 
-  private case class fittingData(lmFront: IndexedSeq[Landmark[_2D]], lmSide: IndexedSeq[Landmark[_2D]], sex: sexEnum, frontNoise: Double, sideNoise: Double){
+  private case class fittingData(lmFront: IndexedSeq[Landmark[_2D]], lmSide: IndexedSeq[Landmark[_2D]], frontNoise: Double, sideNoise: Double){
     def getLmFront: IndexedSeq[Landmark[_2D]] = lmFront
     def getLmSide: IndexedSeq[Landmark[_2D]] = lmSide
-    def getSex: sexEnum = sex
   }
 
   private case class modelContainer(model: StatisticalMeshModel, modelLM: Seq[Landmark[_3D]]){
