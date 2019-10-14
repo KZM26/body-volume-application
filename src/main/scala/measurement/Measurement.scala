@@ -6,6 +6,8 @@ import java.nio.file.{Files, Paths}
 import scalismo.geometry.{Landmark, Point, _3D}
 import scalismo.io.{LandmarkIO, MeshIO}
 import scalismo.mesh.TriangleMesh
+import scalismo.geometry._
+
 import tools.{AStar, EllipseMaster, Utils, ellipseCalculationMethod}
 import measurement.Measurement.sexEnum.sexEnum
 
@@ -94,10 +96,7 @@ object Measurement {
   }
 
   private def pathFindingTest(): Unit = {
-
     // Square Distance
-    // First load files
-    // Extract meshs (.stl) and landmarks (.json)
     val sqFiles = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sq")).sortBy(_.getName)
     val trueDistance = sqFiles.filter(f => f.getName.contains(".stl")).map{f => f.getName.substring(0, f.getName.indexOf(".") - 2).toInt}
     val sqDataset = sqFiles.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
@@ -118,10 +117,37 @@ object Measurement {
     sqData += distance.toList
     Utils.csvWrite(sqFields , sqData.toList, sqDirectory)
 
+    // Sphere Distance
+    val spFiles = new File("data/distance-test/").listFiles.filter(f => f.getName.contains("sp")).sortBy(_.getName)
+    val trueSpDistance = spFiles.filter(f => f.getName.contains(".stl")).map{f => f.getName.substring(0, f.getName.indexOf(".") - 2).toDouble * 2 * math.Pi}
+    val spDataset = spFiles.filter(f => f.getName.contains(".stl")).map{f => MeshIO.readMesh(f).get}
+    val spLandmarks = spFiles.filter(f => f.getName.contains(".json")).map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
+    var spDistance = new ListBuffer[Double]
+
+    spDataset.indices.map{i =>
+      val mesh = spDataset(i)
+      val start = spLandmarks(i).toIndexedSeq(0).point
+      val end = spLandmarks(i).toIndexedSeq(1).point
+      spDistance += AStar.calculateDistance(mesh, start, end) * 2
+    }
+
+    val spFields = ListBuffer("Ground Truth", "True Circumference")
+    val spDirectory = "data/measurement-test-result/sphereDistanceTest.csv"
+    var spData = new ListBuffer[Seq[Any]]
+    spData += trueSpDistance.toList
+    spData += spDistance.toList
+    Utils.csvWrite(spFields , spData.toList, spDirectory)
+
     // Waist Circumference Test
-    // The reference landmarks are based on shape 0 in the training set
-    val inkreateRefFiles = new File("data/inkreate-ref/").listFiles.filter(f => f.getName.contains("json")).sortBy(_.getName)
-    val inkreateRefLandmarks = inkreateRefFiles.map{f => LandmarkIO.readLandmarksJson[_3D](f).get}
+    val inkreateRefPath = "data/inkreate-ref/"
+    val inkreateRefLandmarksA = new File(inkreateRefPath + "0/").listFiles.filter(_.isDirectory).map{dir =>
+      dir.listFiles().sortBy(_.getName).map{f => LandmarkIO.readLandmarksJson[_3D](f).get.toIndexedSeq}.map{lms => lms.sortBy(_.id)}.toIndexedSeq
+    }.toIndexedSeq
+    val inkreateRefLandmarksB = new File(inkreateRefPath + "1/").listFiles.filter(_.isDirectory).map{dir =>
+      dir.listFiles().sortBy(_.getName).map{f => LandmarkIO.readLandmarksJson[_3D](f).get.toIndexedSeq}.map{lms => lms.sortBy(_.id)}.toIndexedSeq
+    }.toIndexedSeq
+
+    val inkreateRefLandmarks = Utils.landmarkAverage(IndexedSeq(inkreateRefLandmarksA, inkreateRefLandmarksB))
 
     // First load files
     val bodyFiles = new File("data/inkreate/").listFiles.sortBy(_.getName)
@@ -143,7 +169,6 @@ object Measurement {
 
     // Get point ID of the relevant landmarks using the reference mesh
     // Assume filter has one result. Get it
-
     val aStarGirth: IndexedSeq[Double] = bodyDataset.indices.map{i =>
       // Get the points from the point ID
       val mesh = bodyDataset(i)
@@ -340,7 +365,7 @@ object Measurement {
   }
 
   def getWaistCircumference(mesh: TriangleMesh[_3D], waistAnt: Point[_3D], waistPost: Point[_3D]): Double = {
-    AStar.calculateXZPlaneDistance(mesh, waistAnt, waistPost) * 2
+    AStar.calculateDistance(mesh, waistAnt, waistPost) * 2
   }
 
   object sexEnum extends Enumeration {

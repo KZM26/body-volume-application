@@ -1,7 +1,6 @@
 package validation
 
 import java.io._
-import java.util._
 
 import build.Build
 import scalismo.geometry._3D
@@ -9,6 +8,9 @@ import scalismo.io._
 import scalismo.statisticalmodel.dataset._
 import scalismo.statisticalmodel._
 import scalismo.mesh._
+import scalismo.registration.{LandmarkRegistration, RigidTransformation}
+
+import scala.util.Random
 import tools.Utils
 
 object Specificity {
@@ -20,7 +22,7 @@ object Specificity {
 
     println("Starting Male Specificity")
 
-    val maleTraining = new File("data/spring-training/male-training/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val maleTraining = Random.shuffle(new File("data/spring-training/male-training/").listFiles.sortBy{f => f.getName}.toList).take(100).map{f => MeshIO.readMesh(f).get}
     val maleTesting = new File("data/spring-training/male-testing/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
     val maleDC = DataCollection.fromMeshSequence(maleTraining.head, maleTraining.tail)._1.get
     val gpModelMale : StatisticalMeshModel = Build.buildGP(maleDC)
@@ -38,7 +40,7 @@ object Specificity {
 
     println("Starting Female Specificity")
 
-    val femaleTraining = new File("data/spring-training/female-training/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val femaleTraining = Random.shuffle(new File("data/spring-training/female-training/").listFiles.sortBy{f => f.getName}.toList).take(100).map{f => MeshIO.readMesh(f).get}
     val femaleTesting = new File("data/spring-training/female-testing/").listFiles.sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
     val femaleDC = DataCollection.fromMeshSequence(femaleTraining.head, femaleTraining.tail)._1.get
     val gpModelFemale : StatisticalMeshModel = Build.buildGP(femaleDC)
@@ -77,9 +79,11 @@ object Specificity {
 
         case "hausdorff" =>
           data.map { m =>
-            Hausdorff.modifiedHausdorffDistance(m, sample)
+            val transform = LandmarkRegistration.rigid3DLandmarkRegistration(sample.pointSet.points.toIndexedSeq.zip(m.pointSet.points.toIndexedSeq), Utils.computeCentreOfMass(m))
+            Hausdorff.modifiedHausdorffDistance(m, sample.transform(transform))
           }.min
       }
+
       dist
     }
   }

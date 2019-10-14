@@ -1,6 +1,5 @@
 package tools
 
-import scalismo.geometry
 import scalismo.geometry.{Point, _3D}
 import scalismo.mesh.TriangleMesh
 import tools.ellipseCalculationMethod.ellipseCalculationMethod
@@ -21,8 +20,8 @@ object  EllipseMaster {
     val a = distance(trueSide, midpoint.toPoint)
     val b = distance(truePost, trueAnt)/2
     val n = 100
-// TODO: Add AGM algorithm
-    method match {
+
+     method match {
       case tools.ellipseCalculationMethod.NUMERICAL =>
         numerical(a, b, n)
       case tools.ellipseCalculationMethod.INTEGRAL =>

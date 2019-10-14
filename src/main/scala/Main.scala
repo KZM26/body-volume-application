@@ -1,5 +1,4 @@
 // Packages
-import preprocessor.Preprocessor
 import build.Build
 import fitting.Fitting
 import measurement.Measurement
@@ -9,6 +8,9 @@ object Main extends App{
     val baseConfig = List("Build (b)", "Fitting (f)", "Measurements (m)", "Preprocessor (p)", "Help (h)", "Quit (q)\n")
     val pConfig = List("View Reference Shape (v)", "Align to Reference (a)")
 
+    println("Initialising Scalismo")
+    scalismo.initialize()
+    println("Done")
     println("Welcome to the Body Volume Application\nSelect an option")
 
     var input = ""
@@ -19,16 +21,13 @@ object Main extends App{
       input match{
 
           case "b" => // Buildz`
-            Build.start()
+            Build.main(null)
 
           case "f" => // Fitting
             Fitting.start()
 
           case "m" => // Measurement
             Measurement.start()
-
-          case "p" => // Preprocessor
-            Preprocessor.start()
 
           case "h" => // Help
             println("Learn how to use a computer you scrub\n")

@@ -10,12 +10,9 @@ object Hausdorff {
     def allDistsBetweenMeshes(mm1: TriangleMesh[_3D], mm2: TriangleMesh[_3D]): Iterator[Double] = {
 
       for (ptM1 <- mm1.pointSet.points) yield {
-
-        val cpM2 = mm2.pointSet.findClosestPoint(ptM1).point
+        val cpM2 = mm2.operations.closestPointOnSurface(ptM1).point
         (ptM1 - cpM2).norm
-
       }
-
     }
 
     val d1 = allDistsBetweenMeshes(m1, m2)

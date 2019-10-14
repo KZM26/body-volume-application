@@ -8,6 +8,9 @@ import scalismo.io.MeshIO
 import scalismo.mesh.{MeshMetrics, TriangleMesh}
 import scalismo.statisticalmodel.StatisticalMeshModel
 import scalismo.statisticalmodel.dataset.DataCollection
+import scalismo.registration.{LandmarkRegistration, RigidTransformation}
+
+import scala.util.Random
 import tools.Utils
 
 object Generalisation {
@@ -19,7 +22,7 @@ object Generalisation {
 
     val maleTraining = new File("data/spring-training/male-training/").listFiles
     val maleTesting = new File("data/spring-training/male-testing/").listFiles
-    val maleCombined = (maleTraining ++ maleTesting).sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val maleCombined = Random.shuffle((maleTraining ++ maleTesting).sortBy{f => f.getName}.toList).take(100).map{f => MeshIO.readMesh(f).get}
     val maleDC = DataCollection.fromMeshSequence(maleCombined.head, maleCombined.tail)._1.get
 
     // Calculate Generalisation
@@ -29,7 +32,7 @@ object Generalisation {
 
     val femaleTraining = new File("data/spring-training/female-training/").listFiles
     val femaleTesting = new File("data/spring-training/female-testing/").listFiles
-    val femaleCombined = (femaleTraining ++ femaleTesting).sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
+    val femaleCombined = Random.shuffle((femaleTraining ++ femaleTesting).sortBy{f => f.getName}.toList).take(100).map{f => MeshIO.readMesh(f).get}
     val femaleDC = DataCollection.fromMeshSequence(femaleCombined.head, femaleCombined.tail)._1.get
 
     // Calculate Generalisation
@@ -56,7 +59,7 @@ object Generalisation {
       val testMesh : TriangleMesh[_3D] = dc.reference.transform(testingCollection.dataItems.head.transformation)
 
       // Training collection with all the other instances
-      val trainingDataItems = dataGroups.slice(0, currFold).flatten ++: dataGroups.slice(currFold + 1, dataGroups.size).flatten
+      val trainingDataItems = dataGroups.slice(0, currFold).flatten ++ dataGroups.slice(currFold + 1, dataGroups.size).flatten
       val trainingCollection = DataCollection(dc.reference, trainingDataItems)
 
       // Build GPMM using DC
@@ -76,18 +79,18 @@ object Generalisation {
   def distancesEval(gpModelSeq: Seq[StatisticalMeshModel], projMesh: TriangleMesh[_3D], distance: String) : Seq[Double] = {
 
     val distances = for(pca <- gpModelSeq) yield {
+
       val proj : TriangleMesh[_3D] = pca.project(projMesh)
-      MeshMetrics.avgDistance(proj,projMesh)
       val dist = distance.toLowerCase match {
 
         case "avg" =>
-          MeshMetrics.avgDistance(proj,projMesh)
+          MeshMetrics.avgDistance(proj, projMesh)
 
         case "rms" =>
-          MeshMetrics.procrustesDistance(proj,projMesh)
+          MeshMetrics.procrustesDistance(proj, projMesh)
 
         case "hausdorff" =>
-          Hausdorff.modifiedHausdorffDistance(proj,projMesh)
+          Hausdorff.modifiedHausdorffDistance(proj, projMesh)
       }
       dist
     }
