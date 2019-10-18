@@ -151,7 +151,7 @@ case class ModelBuild() {
 
     val dc = DataCollection.gpa(inputDC)
     val pcaModel = StatisticalMeshModel.createUsingPCA(dc)
-    val referenceMesh = pcaModel.get.mea
+    val referenceMesh = pcaModel.get.mean
     val zeroMean = VectorField(RealSpace[_3D], (pt:Point[_3D]) => EuclideanVector(0,0,0))
 
     val gpSSM = pcaModel.get.gp.interpolateNystrom(500)
