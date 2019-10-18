@@ -3,17 +3,14 @@ package build
 import java.io.File
 import java.io.PrintWriter
 
-import scalismo.common.{Vectorizer, _}
+import scalismo.common._
 import scalismo.io.MeshIO
 import scalismo.io._
 import scalismo.geometry._
-import scalismo.kernels._
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, StatisticalMeshModel}
 import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.geometry.Dim.ThreeDSpace
 import scalismo.numerics.RandomMeshSampler3D
-
-import scala.collection.parallel._
 
 object Build {
 
@@ -77,9 +74,6 @@ case class ModelBuild() {
 
   def build(): Unit = {
 
-    //println("Starting build process")
-    // First load files
-
     val maleTraining = new File("data/spring-training/male-training/").listFiles
     val maleTesting = new File("data/spring-training/male-testing/").listFiles
     val maleCombined = (maleTraining ++ maleTesting).sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
@@ -90,38 +84,12 @@ case class ModelBuild() {
     val femaleCombined = (femaleTraining ++ femaleTesting).sortBy{f => f.getName}.map{f => MeshIO.readMesh(f).get}
     val femaleDC = DataCollection.fromMeshSequence(femaleCombined.head, femaleCombined.tail)._1.get
 
-    //println("Data collection created")
-
    val gpMaleModel = BuildGP(maleDC)
 
    val gpFemaleModel = BuildGP(femaleDC)
 
-    //println("Displaying Model")
-
-    //val ui = ScalismoUI()
-    //ui.show(gpModel, "fbm")
     StatismoIO.writeStatismoMeshModel(gpMaleModel, new File("data/maleFBM.h5"))
     StatismoIO.writeStatismoMeshModel(gpFemaleModel, new File("data/femaleFBM.h5"))
-    /*var input = ""
-
-    while (input != "y" || input != "n") {
-      input = scala.io.StdIn.readLine("Save model? (y/n)\n").toLowerCase()
-      input match {
-
-        case "y" => // Save model
-          println("Saving model")
-          StatismoIO.writeStatismoMeshModel(gpModel, new File("data/fbm.h5"))
-          println("Model saved")
-          return
-
-        case "n" => // Don't save model
-          return
-
-        case _ => // Any
-          println("That ain't it chief\n")
-      }
-    }
-*/
 
   }
 
@@ -137,18 +105,12 @@ case class ModelBuild() {
     val outputSpec = "data/specificity.csv"
     val outputGen = "data/generalisation.csv"
 
-    // Leave out 1 construction to test Generalisation
-    // Construct shape models leaving out 1 at each construction and measure Generalisation
     println("Calculating Generalisation")
     validation.Generalisation.generalisation(datasetPath, distance, outputGen)
 
-    // Specificity
-    // 10000 samples as per Pishchulin 2017 and Styner 2003
-    //println("Calculating Specificity")
-    //validation.Specificity.specificity(datasetPath, distance, nb, outputSpec)
+    println("Calculating Specificity")
+    validation.Specificity.specificity(datasetPath, distance, nb, outputSpec)
 
-    // Compactness
-    /*
     println("Determining Compactness")
     val compactnessMale = gpModelMale.rank
     val eigenMale = gpModelMale.gp.klBasis.map{k =>
@@ -173,7 +135,7 @@ case class ModelBuild() {
     writerEigenFemale.write(eigenFemale.mkString("\n"))
     writerEigenFemale.close()
 
-    println("Writing complete")*/
+    println("Writing complete")
   }
 
 
@@ -189,12 +151,9 @@ case class ModelBuild() {
 
     val dc = DataCollection.gpa(inputDC)
     val pcaModel = StatisticalMeshModel.createUsingPCA(dc)
-    val referenceMesh = dc.reference
-    // The zero mean
+    val referenceMesh = pcaModel.get.mea
     val zeroMean = VectorField(RealSpace[_3D], (pt:Point[_3D]) => EuclideanVector(0,0,0))
 
-    // val discreteCov : DiscreteMatrixValuedPDKernel[_3D] = pcaModel.get.gp.cov
-    // val gpSSM = pcaModel.get.gp.interpolate(NearestNeighborInterpolator[_3D, Vector[_3D]]())
     val gpSSM = pcaModel.get.gp.interpolateNystrom(500)
     val SSMKernel = gpSSM.cov
 
