@@ -1,0 +1,7 @@
+crown
+waist.anterior
+waist.rt
+waist.lt
+waist.posterior
+metatarsal-phalangeal.v.rt
+metatarsal-phalangeal.v.lt

@@ -1,0 +1,13 @@
+crown
+acromion.rt
+acromion.lt
+waist.anterior
+waist.rt
+waist.lt
+waist.posterior
+trochanterion.rt
+trochanterion.lt
+radial-styloid.rt
+radial-styloid.lt
+metatarsal-phalangeal.v.rt
+metatarsal-phalangeal.v.lt
