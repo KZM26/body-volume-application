@@ -12,7 +12,7 @@ This work is licensed under Apache 2.0
 
 Import into IntelliJ and run main
 
-Data needs to be downloaded seperately due to usage restriction. The following directory structure must be created in the data folder
+Data needs to be downloaded separately due to usage restriction. The following directory structure must be created in the data folder
 
 - distance-test - Part of project
 - fbm-landmarks - Part of project
