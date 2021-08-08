@@ -2,11 +2,23 @@
 
 An application to measure body volume from 2D images.
 
-Base is the [minimal seed template](https://github.com/unibas-gravis/minimal-scalismo-seed) for a [Scalismo](https://github.com/unibas-gravis/scalismo) build.
+Based on the [minimal seed template](https://github.com/unibas-gravis/minimal-scalismo-seed) published by the University of Basel for a [Scalismo](https://github.com/unibas-gravis/scalismo) build.
+
+## Dissertation
+
+Published on [OpenUCT](https://open.uct.ac.za/handle/11427/32797)
 
 ## License
 
 This work is licensed under Apache 2.0
+
+## Modules
+
+The contains the following modules:
+
+1. Model build: Functions to build a GPMM and perform model validation
+2. Measurement: Functions to measure height, volume, and waist circumference
+3. Image fit: Performs 3D reconstruction from supplied 2D images and performs fit validation. 
 
 ## Usage
 
